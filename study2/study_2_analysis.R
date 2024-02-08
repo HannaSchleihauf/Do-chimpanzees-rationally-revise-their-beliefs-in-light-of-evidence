@@ -1,4 +1,4 @@
-# Study Chimpanzee: Do Chimpanzees rationally revise their beliefs in light of evidence?
+# Study Name: Do chimpanzees rationally revise their beliefs in light of evidence?
 # Stduy 1
 
 # Last modified: Jan 8, 2024 21:17
@@ -29,7 +29,7 @@ options(scipen = 999)
 xdata <-
   read.csv(
     file =
-      "./study1/data/Results_Belief_Revision.csv",
+      "./study2/data/Results_Belief_Revision.csv",
     head = TRUE, stringsAsFactors = TRUE
   )
 str(xdata)
@@ -75,41 +75,41 @@ t.data$z.Trial <-
 contr <-
   glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 50000000))
 
-full_exp1 <- glmer(Belief_Revision ~
-  Condition * z.Trial +
-  (1 + Condition.weak_first.code * z.Trial | Chimpanzee),
-data = t.data, control = contr,
-family = binomial(link = "logit")
+full_exp2 <- glmer(Belief_Revision ~
+                Condition * z.Trial +
+                (1 + Condition.weak_first.code * z.Trial | Chimpanzee),
+              data = t.data, control = contr,
+              family = binomial(link = "logit")
 )
 
 
-main_exp1 <- glmer(Belief_Revision ~
-  Condition + z.Trial +
-  (1 + Condition.weak_first.code * z.Trial | Chimpanzee),
-data = t.data, control = contr,
-family = binomial(link = "logit")
+main_exp2 <- glmer(Belief_Revision ~
+                Condition + z.Trial +
+                (1 + Condition.weak_first.code * z.Trial | Chimpanzee),
+              data = t.data, control = contr,
+              family = binomial(link = "logit")
 )
 
-null_exp1 <- glmer(Belief_Revision ~
-  1 +
-  (1 + Condition.weak_first.code * z.Trial | Chimpanzee),
-data = t.data, control = contr,
-family = binomial(link = "logit")
+null_exp2 <- glmer(Belief_Revision ~
+                1 +
+                (1 + Condition.weak_first.code * z.Trial | Chimpanzee),
+              data = t.data, control = contr,
+              family = binomial(link = "logit")
 )
 
-summary(full_exp1)$varcor
-ranef.diagn.plot(full_exp1)
-round(summary(full_exp1)$coefficients, 3)
+summary(full_exp2)$varcor
+ranef.diagn.plot(full_exp2)
+round(summary(full_exp2)$coefficients, 3)
 
 ############################################################################
 # CHECKING ASSUMPTIONS
 ############################################################################
-overdisp.test(full_exp1)
+overdisp.test(full_exp2)
 library(car)
-vif(main_exp1)
+vif(main_exp2)
 # Checking model stability
 m.stab.b <-
-  glmm.model.stab(model.res = full_exp1, contr = contr, use = c("Chimpanzee"))
+  glmm.model.stab(model.res = full_exp2, contr = contr, use = c("Chimpanzee"))
 m.stab.b$detailed$warnings
 as.data.frame(round(m.stab.b$summary[, -1], 3))
 m.stab.plot(round(m.stab.b$summary[, -1], 3))
@@ -124,44 +124,44 @@ cbind(
 ############################################################################
 # MODEL COMPARISONS
 ############################################################################
-round(anova(full_exp1, null_exp1, test = "Chisq"), 3)
-round(drop1(full_exp1, test = "Chisq"), 3)
-round(drop1(main_exp1, test = "Chisq"), 3)
+round(anova(full_exp2, null_exp2, test = "Chisq"), 3)
+round(drop1(full_exp2, test = "Chisq"), 3)
+round(drop1(main_exp2, test = "Chisq"), 3)
 
 ## First peek at effects
-plot(effect("Condition", main_exp1), type = "response")
-plot(effect("Trial", main_exp1), type = "response")
+plot(effect("Condition", main_exp2), type = "response")
+plot(effect("Trial", main_exp2), type = "response")
 
-# Coefficients of the full_exp1 model
-round(summary(full_exp1)$coefficients, 3)
+# Coefficients of the full_exp2 model
+round(summary(full_exp2)$coefficients, 3)
 
 ############################################################################
 # BOOTSTRAPS
 ############################################################################
 
-## Bootstraps of full_exp1 model
+## Bootstraps of full_exp2 model
 # The bootstrap has already been run and is saved in the image
-boot.full_exp1 <- boot.glmm.pred(
-  model.res = full_exp1, excl.warnings = T,
+boot.full_exp2 <- boot.glmm.pred(
+  model.res = full_exp2, excl.warnings = T,
   nboots = 1000, para = F, level = 0.95,
   use = c("Condition", "z.Trial")
 )
 
-round(boot.main_exp1$ci.estimates, 3)
-as.data.frame(round(boot.main_exp1$ci.estimates, 3))
-m.stab.plot(round(boot.main_exp1$ci.estimates, 3))
-boot.main_exp1$ci.predicted
+round(boot.main_exp2$ci.estimates, 3)
+as.data.frame(round(boot.main_exp2$ci.estimates, 3))
+m.stab.plot(round(boot.main_exp2$ci.estimates, 3))
+boot.main_exp2$ci.predicted
 
-boot.main_exp1 <- boot.glmm.pred(
-  model.res = main_exp1, excl.warnings = T,
+boot.main_exp2 <- boot.glmm.pred(
+  model.res = main_exp2, excl.warnings = T,
   nboots = 1000, para = F, level = 0.95,
   use = c("Condition")
 )
 
-round(boot.main_exp1$ci.estimates, 3)
-as.data.frame(round(boot.main_exp1$ci.estimates, 3))
-m.stab.plot(round(boot.main_exp1$ci.estimates, 3))
-boot.main_exp1$ci.predicted
+round(boot.main_exp2$ci.estimates, 3)
+as.data.frame(round(boot.main_exp2$ci.estimates, 3))
+m.stab.plot(round(boot.main_exp2$ci.estimates, 3))
+boot.main_exp2$ci.predicted
 
 ############################################################################
 # PLOTTING
@@ -184,14 +184,14 @@ xdata.agg$Condition2 <-
 xdata.agg$mean.resp2 <-
   jitter(xdata.agg$mean.resp, amount = 0.04)
 
-ci_predicted_strong <- boot.main_exp1$ci.predicted %>%
+ci_predicted_strong <- boot.main_exp2$ci.predicted %>%
   filter(Condition == "strong_first")
 
-ci_predicted_weak <- boot.main_exp1$ci.predicted %>%
+ci_predicted_weak <- boot.main_exp2$ci.predicted %>%
   filter(Condition == "weak_first")
 
 # ggplot
-exp1_plot_Condition <-
+exp2_plot_Condition <-
   ggplot() +
   geom_point(
     data = xdata.agg,
@@ -251,7 +251,7 @@ exp1_plot_Condition <-
     "strong_first" = "dodgerblue",
     "weak_first" = "darkorange"
   )) +
-  labs(title = "Experiment 1") +
+  labs(title = "Experiment 2") +
   theme_classic() +
   theme(
     axis.ticks.x = element_blank(),
@@ -267,4 +267,4 @@ exp1_plot_Condition <-
     ),
     legend.position = "none"
   )
-exp1_plot_Condition
+exp2_plot_Condition
