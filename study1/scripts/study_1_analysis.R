@@ -144,9 +144,8 @@ boot.full_exp1 <- boot.glmm.pred(
 )
 
 round(boot.full_exp1$ci.estimates, 3)
-as.data.frame(round(boot.main_exp1$ci.estimates, 3))
-m.stab.plot(round(boot.main_exp1$ci.estimates, 3))
-boot.main_exp1$ci.predicted
+m.stab.plot(round(boot.full_exp1$ci.estimates, 3))
+boot.full_exp1$ci.predicted
 
 boot.main_exp1 <- boot.glmm.pred(
   model.res = main_exp1, excl.warnings = T,
@@ -166,112 +165,87 @@ save.image("./R_images/study_1_analysis.RData")
 ############################################################################
 load("./R_images/study_1_analysis.RData")
 
-xdata.agg <- xdata2 %>%
-  mutate(first.evidence.chosen.numeric =
-    as.numeric(as.factor(first.evidence.chosen)) - 1) %>%
-  group_by(Chimpanzee, first.evidence) %>%
-  summarise(mean.resp = mean(first.evidence.chosen.numeric, na.rm = T)) %>%
+xdata.agg <- xdata %>%
+  mutate(belief_revision.numeric = as.numeric(Belief_Revision) - 1) %>%
+  group_by(Chimpanzee, Condition) %>%
+  summarise(mean.resp = mean(belief_revision.numeric, na.rm = T)) %>%
   ungroup()
-xdata.agg <- droplevels(xdata.agg)
-
-xdata2$first.evidence <-
-  factor(xdata2$first.evidence,
-         levels = c(
-           "auditory_strong",
-           "trace_weak"
-         )
-  )
-xdata.agg$first.evidence <-
-  factor(xdata.agg$first.evidence,
-         levels = c(
-           "auditory_strong",
-           "trace_weak"
-         )
-  )
-levels(xdata.agg$first.evidence)
+xdata.agg$Condition <- droplevels(xdata.agg$Condition)
 
 # Data manipulation outside ggplot
-xdata.agg$first.evidence2 <-
-  jitter(as.numeric(as.factor(xdata.agg$first.evidence)), amount = 0.12)
+xdata.agg$Condition2 <-
+  jitter(as.numeric(as.factor(xdata.agg$Condition)), amount = 0.12)
 xdata.agg$mean.resp2 <-
   jitter(xdata.agg$mean.resp, amount = 0.04)
 
-ci_predicted_study2_trace <- boot.main_exp.2$ci.predicted %>%
-  filter(first.evidence == "trace_weak")
-ci_predicted_study2_auditory <- boot.main_exp.2$ci.predicted %>%
-  filter(first.evidence == "auditory_strong")
+ci_predicted_strong <- boot.main_exp1$ci.predicted %>%
+  filter(Condition == "strong_first")
+ci_predicted_weak <- boot.main_exp1$ci.predicted %>%
+  filter(Condition == "weak_first")
 
 # ggplot
-exp2_plot_first_choice <-
+exp1_plot_Condition <-
   ggplot() +
   geom_point(
     data = xdata.agg,
-    aes(x = first.evidence2, y = mean.resp2, color = first.evidence),
+    aes(x = Condition2, y = mean.resp2, color = Condition),
     size = 2.5, alpha = .4
   ) +
-  scale_color_manual(values = c(
-    "auditory_strong" = "dodgerblue",
-    "trace_weak" = "darkorange"
-  )) +
+  scale_color_manual(values =
+                       c("strong_first" = "dodgerblue", "weak_first" = "darkorange")) +
   geom_line(
     data = xdata.agg,
-    aes(x = first.evidence2, y = mean.resp2, group = Chimpanzee),
+    aes(x = Condition2, y = mean.resp2, group = Chimpanzee),
     color = "gray", lty = 1, alpha = .7
   ) +
-  geom_hline(yintercept = 0.5, linetype = "dashed", color = "gray30") +
   geom_errorbar(
-    data = ci_predicted_study2_auditory,
+    data = ci_predicted_strong,
     aes(
-      x = 1 - 0.25, y = fitted,
+      x = as.numeric(Condition) - 0.25, y = fitted,
       ymin = lower.cl, ymax = upper.cl,
-      group = first.evidence, color = first.evidence
+      group = Condition, color = Condition
     ),
     width = 0.1, size = 1
   ) +
   geom_errorbar(
-    data = ci_predicted_study2_trace,
+    data = ci_predicted_weak,
     aes(
-      x = 2 - 0.25, y = fitted,
+      x = as.numeric(Condition) + 0.25, y = fitted,
       ymin = lower.cl, ymax = upper.cl,
-      group = first.evidence, color = first.evidence
+      group = Condition, color = Condition
     ),
     width = 0.1, size = 1
   ) +
   geom_point(
-    data = ci_predicted_study1_visual,
-    aes(x = 1 - 0.25, y = fitted),
+    data = ci_predicted_strong,
+    aes(x = as.numeric(Condition) - 0.25, y = fitted),
     color = "dodgerblue", size = 2.5
   ) +
   geom_point(
-    data = ci_predicted_study1_auditory,
-    aes(x = 2 - 0.25, y = fitted),
+    data = ci_predicted_weak,
+    aes(x = as.numeric(Condition) + 0.25, y = fitted),
     color = "darkorange", size = 2.5
   ) +
   scale_x_discrete(
-    limits = c(
-      "auditory_strong",
-      "trace_weak"
-    ),
-    name = "type of evidence",
-    labels = c(
-      "auditory (strong)",
-      "trace (weak)"
-    )
+    limits = c("strong_first", "weak_first"),
+    name = "Condition",
+    labels = c("strong evidence first", "weak evidence first")
   ) +
   scale_y_continuous(
-    name = "proportion of first choices",
+    name = "proportion of belief revision",
     labels = scales::percent
   ) +
   geom_violin(
     data = xdata.agg,
-    aes(x = first.evidence, y = mean.resp, fill = first.evidence),
+    aes(x = Condition, y = mean.resp, fill = Condition),
     position = position_nudge(x = 0),
     alpha = .2
   ) +
   scale_fill_manual(values = c(
-    "auditory_strong" = "dodgerblue",
-    "trace_weak" = "darkorange"
+    "strong_first" = "dodgerblue",
+    "weak_first" = "darkorange"
   )) +
+  labs(title = "Experiment 2") +
   theme_classic() +
   theme(
     axis.ticks.x = element_blank(),
@@ -287,6 +261,6 @@ exp2_plot_first_choice <-
     ),
     legend.position = "none"
   )
-exp2_plot_first_choice
+exp1_plot_Condition
 
 save.image("./R_images/study_1_analysis.RData")

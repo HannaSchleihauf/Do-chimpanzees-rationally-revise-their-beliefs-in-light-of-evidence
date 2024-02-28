@@ -140,9 +140,8 @@ boot.full_exp2 <- boot.glmm.pred(
 )
 
 round(boot.full_exp2$ci.estimates, 3)
-as.data.frame(round(boot.main_exp2$ci.estimates, 3))
-m.stab.plot(round(boot.main_exp2$ci.estimates, 3))
-boot.main_exp2$ci.predicted
+m.stab.plot(round(boot.full_exp2$ci.estimates, 3))
+boot.full_exp2$ci.predicted
 
 boot.main_exp2 <- boot.glmm.pred(
   model.res = main_exp2, excl.warnings = T,
@@ -151,7 +150,6 @@ boot.main_exp2 <- boot.glmm.pred(
 )
 
 round(boot.main_exp2$ci.estimates, 3)
-as.data.frame(round(boot.main_exp2$ci.estimates, 3))
 m.stab.plot(round(boot.main_exp2$ci.estimates, 3))
 boot.main_exp2$ci.predicted
 
@@ -171,7 +169,7 @@ xdata.agg <- xdata %>%
   group_by(Chimpanzee, Condition) %>%
   summarise(mean.resp = mean(belief_revision.numeric, na.rm = T)) %>%
   ungroup()
-xdata.agg <- droplevels(xdata.agg)
+xdata.agg$Condition <- droplevels(xdata.agg$Condition)
 
 # Data manipulation outside ggplot
 xdata.agg$Condition2 <-
