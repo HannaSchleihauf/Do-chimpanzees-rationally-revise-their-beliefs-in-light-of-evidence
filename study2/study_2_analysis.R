@@ -6,12 +6,11 @@
 ############################################################################
 # PACKAGES & FUNCTIONS
 ############################################################################
-# library("readxl")
-library("xlsx")
-library("tidyverse")
-library("emmeans")
-library("effects")
-library("lme4")
+library("easypackages")
+libraries(
+  "lme4", "tidyverse", "tidyselect",
+  "optimx", "emmeans", "car", "effects"
+)
 
 source("./functions/diagnostic_fcns.r")
 source("./functions/glmm_stability.r")
@@ -24,7 +23,7 @@ source("./functions/boot_glmm.r")
 options(scipen = 999)
 
 ############################################################################
-# DATA
+# LOAD DATA & DATA WRANGELING
 ############################################################################
 xdata <-
   read.csv(
@@ -36,9 +35,6 @@ str(xdata)
 xdata$Belief_Revision[xdata$Belief_Revision == "/"] <- NA
 xdata$Belief_Revision <- droplevels(xdata$Belief_Revision)
 
-############################################################################
-# DATA WRANGELING
-############################################################################
 xdata <-
   xdata %>%
   filter(!grepl("filler", Condition)) # deleted fillers
@@ -47,8 +43,6 @@ xdata <-
   arrange(Chimpanzee, Trial) %>%
   group_by(Condition) %>%
   mutate(trial.per.Condition = row_number())
-
-table(xdata$First_Choice, xdata$Condition)
 
 ############################################################################
 # PREPARE DATAFRAME FOR MODEL FITTING
@@ -81,7 +75,6 @@ full_exp2 <- glmer(Belief_Revision ~
               data = t.data, control = contr,
               family = binomial(link = "logit")
 )
-
 
 main_exp2 <- glmer(Belief_Revision ~
                 Condition + z.Trial +
@@ -130,7 +123,7 @@ round(drop1(main_exp2, test = "Chisq"), 3)
 
 ## First peek at effects
 plot(effect("Condition", main_exp2), type = "response")
-plot(effect("Trial", main_exp2), type = "response")
+plot(effect("z.Trial", main_exp2), type = "response")
 
 # Coefficients of the full_exp2 model
 round(summary(full_exp2)$coefficients, 3)
@@ -138,7 +131,6 @@ round(summary(full_exp2)$coefficients, 3)
 ############################################################################
 # BOOTSTRAPS
 ############################################################################
-
 ## Bootstraps of full_exp2 model
 # The bootstrap has already been run and is saved in the image
 boot.full_exp2 <- boot.glmm.pred(
@@ -147,7 +139,7 @@ boot.full_exp2 <- boot.glmm.pred(
   use = c("Condition", "z.Trial")
 )
 
-round(boot.main_exp2$ci.estimates, 3)
+round(boot.full_exp2$ci.estimates, 3)
 as.data.frame(round(boot.main_exp2$ci.estimates, 3))
 m.stab.plot(round(boot.main_exp2$ci.estimates, 3))
 boot.main_exp2$ci.predicted
@@ -163,9 +155,13 @@ as.data.frame(round(boot.main_exp2$ci.estimates, 3))
 m.stab.plot(round(boot.main_exp2$ci.estimates, 3))
 boot.main_exp2$ci.predicted
 
+save.image("./R_images/study_2_analysis.RData")
+
 ############################################################################
 # PLOTTING
 ############################################################################
+load("./R_images/study_2_analysis.RData")
+
 library(gghalves)
 library(ggthemes)
 library(cowplot)
@@ -180,13 +176,11 @@ xdata.agg <- droplevels(xdata.agg)
 # Data manipulation outside ggplot
 xdata.agg$Condition2 <-
   jitter(as.numeric(as.factor(xdata.agg$Condition)), amount = 0.12)
-
 xdata.agg$mean.resp2 <-
   jitter(xdata.agg$mean.resp, amount = 0.04)
 
 ci_predicted_strong <- boot.main_exp2$ci.predicted %>%
   filter(Condition == "strong_first")
-
 ci_predicted_weak <- boot.main_exp2$ci.predicted %>%
   filter(Condition == "weak_first")
 
@@ -198,7 +192,8 @@ exp2_plot_Condition <-
     aes(x = Condition2, y = mean.resp2, color = Condition),
     size = 2.5, alpha = .4
   ) +
-  scale_color_manual(values = c("strong_first" = "dodgerblue", "weak_first" = "darkorange")) +
+  scale_color_manual(values =
+    c("strong_first" = "dodgerblue", "weak_first" = "darkorange")) +
   geom_line(
     data = xdata.agg,
     aes(x = Condition2, y = mean.resp2, group = Chimpanzee),
@@ -268,3 +263,5 @@ exp2_plot_Condition <-
     legend.position = "none"
   )
 exp2_plot_Condition
+
+save.image("./R_images/study_2_analysis.RData")
