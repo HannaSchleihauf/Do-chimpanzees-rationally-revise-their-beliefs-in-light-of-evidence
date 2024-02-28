@@ -161,15 +161,16 @@ m.stab.plot(round(boot.main_exp.1$ci.estimates, 3))
 boot.main_exp.1$ci.predicted
 
 ############################################################################
-# PLOTTING
+# PLOTTING STUDY 1
 ############################################################################
+library(tidyverse)
 library(gghalves)
 library(ggthemes)
 library(cowplot)
 
 xdata.agg <- xdata1 %>%
   mutate(first.evidence.chosen.numeric =
-    as.numeric(as.factor(first.evidence.chosen)) - 1) %>%
+           as.numeric(as.factor(first.evidence.chosen)) - 1) %>%
   group_by(Chimpanzee, first.evidence) %>%
   summarise(mean.resp = mean(first.evidence.chosen.numeric, na.rm = T)) %>%
   ungroup()
@@ -177,17 +178,17 @@ xdata.agg <- droplevels(xdata.agg)
 
 xdata1$first.evidence <-
   factor(xdata1$first.evidence,
-    levels = c(
-      "visual_strong",
-      "auditory_weak"
-    )
+         levels = c(
+           "visual_strong",
+           "auditory_weak"
+         )
   )
 xdata.agg$first.evidence <-
   factor(xdata.agg$first.evidence,
-    levels = c(
-      "visual_strong",
-      "auditory_weak"
-    )
+         levels = c(
+           "visual_strong",
+           "auditory_weak"
+         )
   )
 levels(xdata.agg$first.evidence)
 
@@ -261,7 +262,6 @@ exp1_plot_first_choice <-
   ) +
   scale_y_continuous(
     name = "proportion of first choices",
-    limits=c(0, 1),
     labels = scales::percent
   ) +
   coord_cartesian(ylim = c(0, 1)) +
@@ -436,42 +436,36 @@ boot.main_exp.2$ci.predicted
 save.image("./R_images/additional_analyses.RData")
 
 ############################################################################
-# PLOTTING
+# PLOTTING STUDY 2
 ############################################################################
-load("./R_images/additional_analyses.RData")
-
-library(gghalves)
-library(ggthemes)
-library(cowplot)
-
-xdata.agg <- xdata2 %>%
+xdata.agg.2 <- xdata2 %>%
   mutate(first.evidence.chosen.numeric =
-    as.numeric(as.factor(first.evidence.chosen)) - 1) %>%
+           as.numeric(as.factor(first.evidence.chosen)) - 1) %>%
   group_by(Chimpanzee, first.evidence) %>%
   summarise(mean.resp = mean(first.evidence.chosen.numeric, na.rm = T)) %>%
   ungroup()
-xdata.agg <- droplevels(xdata.agg)
+xdata.agg.2 <- droplevels(xdata.agg.2)
 
 xdata2$first.evidence <-
   factor(xdata2$first.evidence,
-    levels = c(
-      "auditory_strong",
-      "trace_weak"
-    )
+         levels = c(
+           "auditory_strong",
+           "trace_weak"
+         )
   )
-xdata.agg$first.evidence <-
-  factor(xdata.agg$first.evidence,
-    levels = c(
-      "auditory_strong",
-      "trace_weak"
-    )
+xdata.agg.2$first.evidence <-
+  factor(xdata.agg.2$first.evidence,
+         levels = c(
+           "auditory_strong",
+           "trace_weak"
+         )
   )
 
 # Data manipulation outside ggplot
-xdata.agg$first.evidence2 <-
-  jitter(as.numeric(as.factor(xdata.agg$first.evidence)), amount = 0.12)
-xdata.agg$mean.resp2 <-
-  jitter(xdata.agg$mean.resp, amount = 0.04)
+xdata.agg.2$first.evidence2 <-
+  jitter(as.numeric(as.factor(xdata.agg.2$first.evidence)), amount = 0.12)
+xdata.agg.2$mean.resp2 <-
+  jitter(xdata.agg.2$mean.resp, amount = 0.04)
 
 ci_predicted_study2_trace <- boot.main_exp.2$ci.predicted %>%
   filter(first.evidence == "trace_weak")
@@ -482,7 +476,7 @@ ci_predicted_study2_auditory <- boot.main_exp.2$ci.predicted %>%
 exp2_plot_first_choice <-
   ggplot() +
   geom_point(
-    data = xdata.agg,
+    data = xdata.agg.2,
     aes(x = first.evidence2, y = mean.resp2, color = first.evidence),
     size = 2.5, alpha = .4
   ) +
@@ -491,7 +485,7 @@ exp2_plot_first_choice <-
     "trace_weak" = "darkorange"
   )) +
   geom_line(
-    data = xdata.agg,
+    data = xdata.agg.2,
     aes(x = first.evidence2, y = mean.resp2, group = Chimpanzee),
     color = "gray", lty = 1, alpha = .7
   ) +
@@ -537,11 +531,10 @@ exp2_plot_first_choice <-
   ) +
   scale_y_continuous(
     name = "proportion of first choices",
-    limits=c(0, 1),
     labels = scales::percent
   ) +
   geom_violin(
-    data = xdata.agg,
+    data = xdata.agg.2,
     aes(x = first.evidence, y = mean.resp, fill = first.evidence),
     position = position_nudge(x = 0),
     alpha = .2
