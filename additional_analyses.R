@@ -24,7 +24,7 @@ source("./functions/boot_glmm.r")
 xdata1 <-
   read.csv(
     file =
-      "./study2/data/Results_Belief_Revision.csv",
+      "./study1/data/Results_Belief_Revision.csv",
     head = TRUE, stringsAsFactors = TRUE
   )
 xdata1$Belief_Revision[xdata1$Belief_Revision == "/"] <- NA
@@ -32,20 +32,38 @@ xdata1$Belief_Revision <- droplevels(xdata1$Belief_Revision)
 
 xdata1 <-
   xdata1 %>%
-  filter(!grepl("filler", Condition)) %>%
   arrange(Chimpanzee, Trial) %>%
   group_by(Condition) %>%
   mutate(trial.per.Condition = row_number()) %>%
   mutate(first.evidence = case_when(
     Condition == "strong_first" ~ "visual_strong",
-    Condition == "weak_first" ~ "auditory_weak"
+    Condition == "weak_first" ~ "auditory_weak",
+    Condition == "filler_weak" ~ "auditory_weak",
+    Condition == "filler_strong" ~ "visual_strong"
   )) %>%
   mutate(first.evidence.chosen = case_when(
     Condition == "strong_first" & First_Choice == "strong" ~ "yes",
     Condition == "strong_first" & First_Choice == "weak" ~ "no",
     Condition == "weak_first" & First_Choice == "weak" ~ "yes",
-    Condition == "weak_first" & First_Choice == "strong" ~ "no"
+    Condition == "weak_first" & First_Choice == "strong" ~ "no",
+    Condition == "filler_weak" & First_Choice == "weak" ~ "yes",
+    Condition == "filler_weak" & First_Choice == "empty" ~ "no",
+    Condition == "filler_strong" & First_Choice == "strong" ~ "yes",
+    Condition == "filler_strong" & First_Choice == "empty" ~ "no"
+)) %>%
+  mutate(first.evidence.chosen.numeric = case_when(
+    Condition == "strong_first" & First_Choice == "strong" ~ "1",
+    Condition == "strong_first" & First_Choice == "weak" ~ "0",
+    Condition == "weak_first" & First_Choice == "weak" ~ "1",
+    Condition == "weak_first" & First_Choice == "strong" ~ "0",
+    Condition == "filler_weak" & First_Choice == "weak" ~ "1",
+    Condition == "filler_weak" & First_Choice == "empty" ~ "0",
+    Condition == "filler_strong" & First_Choice == "strong" ~ "1",
+    Condition == "filler_strong" & First_Choice == "empty" ~ "0"
   ))
+
+xdata1$first.evidence.chosen.numeric <-
+  as.numeric(xdata1$first.evidence.chosen.numeric)
 
 ############################################################################
 # PREPARE DATAFRAME FOR MODEL FITTING
@@ -160,6 +178,8 @@ round(boot.main_exp.1$ci.estimates, 3)
 m.stab.plot(round(boot.main_exp.1$ci.estimates, 3))
 boot.main_exp.1$ci.predicted
 
+table(xdata1$first.evidence, xdata1$first.evidence.chosen)
+
 ############################################################################
 # PLOTTING STUDY 1
 ############################################################################
@@ -168,28 +188,15 @@ library(gghalves)
 library(ggthemes)
 library(cowplot)
 
-xdata.agg <- xdata1 %>%
-  mutate(first.evidence.chosen.numeric =
-           as.numeric(as.factor(first.evidence.chosen)) - 1) %>%
-  group_by(Chimpanzee, first.evidence) %>%
-  summarise(mean.resp = mean(first.evidence.chosen.numeric, na.rm = T)) %>%
-  ungroup()
-xdata.agg <- droplevels(xdata.agg)
-
 xdata1$first.evidence <-
   factor(xdata1$first.evidence,
          levels = c(
-           "visual_strong",
-           "auditory_weak"
+           "visual_strong", "auditory_weak"
          )
   )
-xdata.agg$first.evidence <-
-  factor(xdata.agg$first.evidence,
-         levels = c(
-           "visual_strong",
-           "auditory_weak"
-         )
-  )
+xdata.agg <- xdata1 %>%
+  group_by(Chimpanzee, first.evidence) %>%
+  summarise(mean.resp = mean(first.evidence.chosen.numeric), na.rm = T)
 levels(xdata.agg$first.evidence)
 
 # Data manipulation outside ggplot
@@ -298,7 +305,7 @@ exp1_plot_first_choice
 xdata2 <-
   read.csv(
     file =
-      "./study1/data/Results_Belief_Revision.csv",
+      "./study2/data/Results_Belief_Revision.csv",
     head = TRUE, stringsAsFactors = TRUE
   )
 xdata2$Belief_Revision[xdata2$Belief_Revision == "/"] <- NA
@@ -306,19 +313,34 @@ xdata2$Belief_Revision <- droplevels(xdata2$Belief_Revision)
 
 xdata2 <-
   xdata2 %>%
-  filter(!grepl("filler", Condition)) %>%
   arrange(Chimpanzee, Trial) %>%
   group_by(Condition) %>%
   mutate(trial.per.Condition = row_number()) %>%
   mutate(first.evidence = case_when(
     Condition == "strong_first" ~ "auditory_strong",
-    Condition == "weak_first" ~ "trace_weak"
+    Condition == "weak_first" ~ "trace_weak",
+    Condition == "filler_weak" ~ "trace_weak",
+    Condition == "filler_strong" ~ "auditory_strong"
   )) %>%
   mutate(first.evidence.chosen = case_when(
     Condition == "strong_first" & First_Choice == "strong" ~ "yes",
     Condition == "strong_first" & First_Choice == "weak" ~ "no",
     Condition == "weak_first" & First_Choice == "weak" ~ "yes",
-    Condition == "weak_first" & First_Choice == "strong" ~ "no"
+    Condition == "weak_first" & First_Choice == "strong" ~ "no",
+    Condition == "filler_weak" & First_Choice == "weak" ~ "yes",
+    Condition == "filler_weak" & First_Choice == "empty" ~ "no",
+    Condition == "filler_strong" & First_Choice == "strong" ~ "yes",
+    Condition == "filler_strong" & First_Choice == "empty" ~ "no"
+  )) %>%
+  mutate(first.evidence.chosen.numeric = case_when(
+    Condition == "strong_first" & First_Choice == "strong" ~ "1",
+    Condition == "strong_first" & First_Choice == "weak" ~ "0",
+    Condition == "weak_first" & First_Choice == "weak" ~ "1",
+    Condition == "weak_first" & First_Choice == "strong" ~ "0",
+    Condition == "filler_weak" & First_Choice == "weak" ~ "1",
+    Condition == "filler_weak" & First_Choice == "empty" ~ "0",
+    Condition == "filler_strong" & First_Choice == "strong" ~ "1",
+    Condition == "filler_strong" & First_Choice == "empty" ~ "0"
   ))
 
 ############################################################################
@@ -509,12 +531,12 @@ exp2_plot_first_choice <-
     width = 0.1, size = 1
   ) +
   geom_point(
-    data = ci_predicted_study1_visual,
+    data = ci_predicted_study2_auditory,
     aes(x = 1 - 0.25, y = fitted),
     color = "dodgerblue", size = 2.5
   ) +
   geom_point(
-    data = ci_predicted_study1_auditory,
+    data = ci_predicted_study2_trace,
     aes(x = 2 - 0.25, y = fitted),
     color = "darkorange", size = 2.5
   ) +

@@ -17,8 +17,6 @@ library(ggthemes)
 library(cowplot)
 
 xdata.agg <- xdata1 %>%
-  mutate(first.evidence.chosen.numeric =
-           as.numeric(as.factor(first.evidence.chosen)) - 1) %>%
   group_by(Chimpanzee, first.evidence) %>%
   summarise(mean.resp = mean(first.evidence.chosen.numeric, na.rm = T)) %>%
   ungroup()
@@ -104,8 +102,8 @@ exp1_plot_first_choice <-
     ),
     name = "type of evidence",
     labels = c(
-      "visual (weak)",
-      "auditroy (strong)"
+      "visual (strong)",
+      "auditroy (weak)"
     )
   ) +
   scale_y_continuous(
@@ -141,7 +139,7 @@ exp1_plot_first_choice <-
 exp1_plot_first_choice
 
 ############################################################################
-# STUDY 2
+# PLOTTING STUDY 2
 ############################################################################
 xdata.agg.2 <- xdata2 %>%
   mutate(first.evidence.chosen.numeric =
@@ -214,12 +212,12 @@ exp2_plot_first_choice <-
     width = 0.1, size = 1
   ) +
   geom_point(
-    data = ci_predicted_study1_visual,
+    data = ci_predicted_study2_auditory,
     aes(x = 1 - 0.25, y = fitted),
     color = "dodgerblue", size = 2.5
   ) +
   geom_point(
-    data = ci_predicted_study1_auditory,
+    data = ci_predicted_study2_trace,
     aes(x = 2 - 0.25, y = fitted),
     color = "darkorange", size = 2.5
   ) +
