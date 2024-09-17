@@ -1,0 +1,1612 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+Questions for Hanna:
+-Which model is used (full or main) for stats for each case (first choice & belief revision for each exp)?
+-How to extract CI stuff (average? z closest to 0?)
+
+
+
+
+## Import libraries and data
+
+```{r Libraries and functions}
+library(ggplot2)
+library(rstan)
+library(reshape2)
+library(Hmisc)
+library(viridisLite)
+library(ggh4x)
+library(dplyr)
+library(car)
+library(lme4)
+library(tidyverse)
+library(tidyselect)
+library(optimx)
+library(emmeans)
+
+# Load stored functions
+source("./Functions/diagnostic_fcns.r")
+source("./Functions/glmm_stability.r")
+source("./Functions/drop1_para.r")
+source("./Functions/boot_glmm.r")
+
+# inverse logit function
+inv_logit <- function(x){
+  return(exp(x)/(1+exp(x)))
+}
+
+# se function
+se <- function(x) sqrt(var(x)/length(x))
+```
+
+```{r Load data}
+# load data for both experiments
+dat1 <-
+  read.csv(
+    file =
+      "./study1/data/Results_Belief_Revision.csv",
+    head = TRUE, stringsAsFactors = TRUE
+  )
+dat2 <- 
+  read.csv(
+    file =
+      "./study2/data/Results_Belief_Revision.csv",
+    head = TRUE, stringsAsFactors = TRUE
+  )
+
+# label experiments and combine
+dat1$exp <- 1
+dat2$exp <- 2
+dat <- rbind(dat1,dat2)
+
+# code variables
+for (i in 1:nrow(dat)){
+  # Condition 
+  thisCondition <- dat$Condition[i]
+  if (thisCondition == "filler_weak" | thisCondition == "filler_strong"){
+    dat$trialType[i] <- 0 # filler trial
+    dat$cond[i] <- ifelse(dat$Condition[i] == "filler_strong", 
+                          1, 0) # 1 = strong, 0 = weak
+
+  } else {
+    dat$trialType[i] <- 1 # test trial
+    dat$cond[i] <- ifelse(dat$Condition[i] == "strong_first", 
+                          1, 0) # 1 = strong first, 0 = weak first
+  }
+  
+  # Choice
+  dat$choice1[i] <- ifelse(dat$First_Choice[i] == "strong", 
+                           1, 0) # 1 = strong, 0 = weak
+  
+  if (dat$Second_Choice[i] == "/"){
+    dat$choice2[i] <- NA # no second choice on filler trials
+  } else {
+    dat$choice2[i] <- ifelse(dat$Second_Choice[i] == "strong", 1, 0)
+  }
+  
+  # Belief revision
+  if (dat$Belief_Revision[i] == "yes"){
+    dat$belief_r[i] <- 1
+  } else if (dat$Belief_Revision[i] == "no"){
+    dat$belief_r[i] <- 0
+  } else {
+    dat$belief_r[i] <- NA
+  }
+}
+
+
+# Create dataframes for analyses
+
+# First choice analysis (from test trials & filler trials)
+# Experiment 1
+firstChoice_exp1 <- subset(dat, exp == 1) # includes filler trials
+firstChoice_exp1$subjID <- as.numeric(as.factor(firstChoice_exp1$Chimpanzee))
+# Experiment 2
+firstChoice_exp2 <- subset(dat, exp == 2)
+firstChoice_exp2$subjID <- as.numeric(as.factor(firstChoice_exp2$Chimpanzee))
+
+# Full analysis (from test trials only)
+# Experiment 1
+fullData_exp1 <- subset(dat, exp == 1 & trialType == 1)
+fullData_exp1$subjID <- as.numeric(as.factor(fullData_exp1$Chimpanzee))
+# Experiment 2
+fullData_exp2 <- subset(dat, exp == 2 & trialType == 1)
+fullData_exp2$subjID <- as.numeric(as.factor(fullData_exp2$Chimpanzee))
+```
+
+
+## Defining Bayesian Models
+
+# First choice model
+```{stan output.var = "model0"}
+// Model 0: fit eStrong and eWeak from first choice 
+
+data {
+    int n; // number of rows
+    int nsubj; // number of subjects
+    int subj[n]; // subject id
+    int condition[n]; // 1 = strong first condition, 0 = weak first condition
+    int choice1[n]; // choice after first evidence
+}
+
+transformed data {
+}
+
+parameters {
+    real eBias; // strength of initial belief
+    real eStrong; // strength (in terms of belief change) of strong evidence
+    real eWeak; // strength (in terms of belief change) of weak evidence
+
+    real subj_eStrong_adj[nsubj];        // individual adjustment from group eStrong
+    real<lower=0> subj_eStrong_adj_SD;   // SD on eStrong-adjustments across subjects
+
+    real subj_eWeak_adj[nsubj];        // individual adjustment from group eWeak
+    real<lower=0> subj_eWeak_adj_SD;   // SD on eWeak-adjustments across subjects
+}
+  
+model { 
+    // group priors
+    eBias ~ normal(0,1); 
+    eStrong ~ normal(0,1);
+    eWeak ~ normal(0,1);
+
+    // prior for SD on subject adjustments
+    subj_eStrong_adj_SD ~ exponential(1); 
+    subj_eWeak_adj_SD ~ exponential(1);
+
+    // prior for subject adjustments
+    for(s in 1:nsubj) {
+        subj_eStrong_adj[s] ~ normal(0,subj_eStrong_adj_SD);
+        subj_eWeak_adj[s] ~ normal(0,subj_eWeak_adj_SD);
+    }
+    
+    // model
+    for(i in 1:n) {
+        // belief after first evidence
+        real b1 = inv_logit(eBias + (eStrong + subj_eStrong_adj[subj[i]])*(condition[i] == 1) 
+                                  + (eWeak + subj_eWeak_adj[subj[i]])*(condition[i] == 0) );
+
+        // choice after first evidence, where 1 = strong and 0 = weak
+        choice1[i] ~ binomial(1, b1);
+    }
+}
+
+```
+
+# Full model
+```{stan output.var = "model1"}
+// Model 1: individual fits for eStrong and eWeak from all test trials
+
+data {
+    int n; // number of rows
+    int nsubj; // number of subjects
+    int subj[n]; // subject id
+    int condition[n]; // 1 = strong first, 0 = weak first
+    int choice1[n]; // choice after first evidence
+    int choice2[n]; //choice after second evidence 
+}
+
+transformed data {
+}
+
+parameters {
+    real eBias; // initial belief strength
+    real eStrong; // strength (in terms of belief change) of strong evidence
+    real eWeak; // strength (in terms of belief change) of weak evidence
+
+    real subj_eStrong_adj[nsubj];        // individual adjustment from group eStrong
+    real<lower=0> subj_eStrong_adj_SD;   // SD on eStrong-adjustments across subjects
+
+    real subj_eWeak_adj[nsubj];        // individual adjustment from group eWeak
+    real<lower=0> subj_eWeak_adj_SD;   // SD on eWeak-adjustments across subjects
+}
+  
+model { 
+    // group priors
+    eBias ~ normal(0,1); 
+    eStrong ~ normal(0,1);
+    eWeak ~ normal(0,1);
+
+    // prior for sd on adjustments across subj
+    subj_eStrong_adj_SD ~ exponential(1);
+    subj_eWeak_adj_SD ~ exponential(1);
+
+    // prior for subject adjustments
+    for(s in 1:nsubj) {
+        subj_eStrong_adj[s] ~ normal(0,subj_eStrong_adj_SD);
+        subj_eWeak_adj[s] ~ normal(0,subj_eWeak_adj_SD);
+    }
+    
+    // model
+    for(i in 1:n) {
+        // belief after first evidence
+        real b1 = inv_logit(eBias + (eStrong + subj_eStrong_adj[subj[i]])*(condition[i] == 1) 
+                                  + (eWeak + subj_eWeak_adj[subj[i]])*(condition[i] == 0) );
+
+        // belief after second evidence
+        real b2 = inv_logit(eBias + (eStrong + subj_eStrong_adj[subj[i]]) + 
+                                    (eWeak + subj_eWeak_adj[subj[i]]));
+
+        // choice after first evidence, where 1 = strong and 0 = weak
+        choice1[i] ~ binomial(1, b1);
+        
+        // choice after second evidence
+        choice2[i] ~ binomial(1, b2);
+    }
+}
+
+```
+
+## Experiment 1
+
+```{r Experiment 1 - Fit first choice GLM}
+##################### Prepare data for model fitting ###########################
+firstChoiceData_exp1_GLM <- firstChoice_exp1 %>%
+  arrange(Chimpanzee, Trial) %>%
+  group_by(Condition) %>%
+  mutate(trial.per.Condition = row_number()) %>%
+  mutate(first.evidence = case_when(
+    Condition == "strong_first" ~ "visual_strong",
+    Condition == "weak_first" ~ "auditory_weak",
+    Condition == "filler_weak" ~ "auditory_weak",
+    Condition == "filler_strong" ~ "visual_strong"
+  )) %>%
+  mutate(first.evidence.chosen = case_when(
+    Condition == "strong_first" & First_Choice == "strong" ~ "yes",
+    Condition == "strong_first" & First_Choice == "weak" ~ "no",
+    Condition == "weak_first" & First_Choice == "weak" ~ "yes",
+    Condition == "weak_first" & First_Choice == "strong" ~ "no",
+    Condition == "filler_weak" & First_Choice == "weak" ~ "yes",
+    Condition == "filler_weak" & First_Choice == "empty" ~ "no",
+    Condition == "filler_strong" & First_Choice == "strong" ~ "yes",
+    Condition == "filler_strong" & First_Choice == "empty" ~ "no"
+  )) %>%
+  mutate(first.evidence.chosen.numeric = case_when(
+    Condition == "strong_first" & First_Choice == "strong" ~ "1",
+    Condition == "strong_first" & First_Choice == "weak" ~ "0",
+    Condition == "weak_first" & First_Choice == "weak" ~ "1",
+    Condition == "weak_first" & First_Choice == "strong" ~ "0",
+    Condition == "filler_weak" & First_Choice == "weak" ~ "1",
+    Condition == "filler_weak" & First_Choice == "empty" ~ "0",
+    Condition == "filler_strong" & First_Choice == "strong" ~ "1",
+    Condition == "filler_strong" & First_Choice == "empty" ~ "0"
+  ))
+
+firstChoiceData_exp1_GLM$first.evidence.chosen.numeric <-
+  as.numeric(firstChoiceData_exp1_GLM$first.evidence.chosen.numeric)
+
+# Table
+first.exp1.fe.re <- fe.re.tab(fe.model =
+    "first.evidence.chosen ~ first.evidence + trial.per.Condition",
+  re = "(1|Chimpanzee)", data = firstChoiceData_exp1_GLM)
+first.exp1.t.data <- first.exp1.fe.re$data
+
+# Center/scale dummy variables
+first.exp1.t.data$first.evidence.visual_strong.code <-
+  first.exp1.t.data$first.evidence.visual_strong -
+  mean(first.exp1.t.data$first.evidence.visual_strong)
+first.exp1.t.data$z.Trial <- scale(first.exp1.t.data$trial.per.Condition)
+
+
+######################### Fit GLMM ############################################
+
+# define controls
+contr <- glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 50000000))
+
+# fit three model levels
+first_full_exp.1 <- glmer(first.evidence.chosen ~ first.evidence * z.Trial +
+                            (1 + first.evidence.visual_strong.code *
+                            z.Trial || Chimpanzee),
+                          data = first.exp1.t.data, control = contr,
+                          family = binomial(link = "logit")
+)
+
+first_main_exp.1 <- glmer(first.evidence.chosen ~ first.evidence + z.Trial +
+                            (1 + first.evidence.visual_strong.code *
+                            z.Trial || Chimpanzee),
+                          data = first.exp1.t.data, control = contr,
+                          family = binomial(link = "logit")
+)
+
+first_null_exp.1 <- glmer(first.evidence.chosen ~ 1 +
+                            (1 + first.evidence.visual_strong.code *
+                            z.Trial || Chimpanzee),
+                          data = first.exp1.t.data, control = contr,
+                          family = binomial(link = "logit")
+)
+
+# Model diagnostics
+summary(first_full_exp.1)$varcor
+ranef.diagn.plot(first_full_exp.1)
+round(summary(first_full_exp.1)$coefficients, 3)
+
+
+######################## Check model assumptions ###############################
+
+# overdispersion
+overdisp.test(first_full_exp.1)
+
+# variance inflation factor
+vif(first_main_exp.1)
+
+# model stability
+m.stab.b <- glmm.model.stab(model.res = first_full_exp.1, 
+                            contr = contr, use = c("Chimpanzee"))
+m.stab.b$detailed$warnings
+as.data.frame(round(m.stab.b$summary[, -1], 3))
+m.stab.plot(round(m.stab.b$summary[, -1], 3))
+
+# model stability only with models that did not give a warning message
+m.stab.b$detailed <- m.stab.b$detailed %>%
+  filter(warnings == "none")
+cbind(apply(m.stab.b$detailed, 2, min),apply(m.stab.b$detailed, 2, max))
+
+########################### Model Comparisons ##################################
+
+round(anova(first_full_exp.1, first_null_exp.1, test = "Chisq"), 3)
+round(drop1(first_full_exp.1, test = "Chisq"), 3)
+round(drop1(first_main_exp.1, test = "Chisq"), 3)
+
+# Coefficients of the full_exp.1 model
+round(summary(first_full_exp.1)$coefficients, 3)
+
+############################# Bootstraps #######################################
+# already run and saved in image
+
+# For first_full_exp.1 model
+boot.first_full_exp.1 <- boot.glmm.pred(model.res = first_full_exp.1, 
+                                        excl.warnings = T,
+                                        nboots = 1000, para = F, level = 0.95,
+                                        use = c("first.evidence", "z.Trial"))
+# Save predicted CIs
+exp1_first_full_ci_predicted <- boot.first_full_exp.1$ci.predicted
+
+# Plot
+m.stab.plot(round(boot.first_full_exp.1$ci.estimates, 3))
+
+# For main_exp.1 model
+boot.first_main_exp.1 <- boot.glmm.pred(model.res = first_main_exp.1, 
+                                        excl.warnings = T,
+                                        nboots = 1000, para = F, level = 0.95,
+                                        use = c("first.evidence"))
+
+# Save predicted CIs
+exp1_first_main_ci_predicted <- boot.first_main_exp.1$ci.predicted
+
+# Plot
+m.stab.plot(round(boot.first_main_exp.1$ci.estimates, 3))
+```
+
+```{r Experiment 1 - Fit first choice Stan model}
+# create data structure
+stan_exp1_firstChoice_data <- list(n = nrow(firstChoice_exp1), # number of trials
+                                   nsubj = length(unique(firstChoice_exp1$subjID)), # number of subjects
+                                   subj = firstChoice_exp1$subjID, # subject ID
+                                   condition = firstChoice_exp1$cond,  # 1 = strong first, 0 = weak first
+                                   choice1 = firstChoice_exp1$choice1) # 1 = strong, 0 = weak
+
+# fit model
+stan_exp1_firstChoice_fit <- sampling(model0, data=stan_exp1_firstChoice_data, 
+                                      iter=20000, chains=2, cores=2, 
+                                      control=list(adapt_delta = .999, max_treedepth = 15))
+
+# view fit
+stan_exp1_firstChoice_fit
+
+
+# extract individual parameter fits
+
+# create summary object to access parameters
+stan_exp1_firstChoice_fit_summary <- summary(stan_exp1_firstChoice_fit)$summary
+
+# group parameters
+exp1_firstChoice_eBias <- stan_exp1_firstChoice_fit_summary[1]
+exp1_firstChoice_eStrong <- stan_exp1_firstChoice_fit_summary[2]
+exp1_firstChoice_eWeak <- stan_exp1_firstChoice_fit_summary[3]
+
+# compile individual values
+firstChoice_subjFits <- data.frame()
+for (subj in unique(firstChoice_exp1$subjID)){
+  name <- unique(firstChoice_exp1$Chimpanzee[firstChoice_exp1$subjID == subj])
+  this_eStrong <- exp1_firstChoice_Strong + stan_exp1_firstChoice_fit_summary[subj + 3] 
+  this_eWeak <- exp1_firstChoice_eWeak + stan_exp1_firstChoice_fit_summary[subj + 19]
+  firstChoice_subjFits <- rbind(firstChoice_subjFits, 
+                                data.frame(exp = "Experiment 1", name, subjID = subj, 
+                                           group.eStrong = exp1_firstChoice_eStrong, 
+                                           group.eWeak = exp1_firstChoice_eWeak,
+                                           strong = this_eStrong, weak = this_eWeak))
+}
+```
+
+```{r Experiment 1 - Fit full GLM}
+##################### Prepare data for model fitting ###########################
+fullData_exp1 <- fullData_exp1 %>%
+  arrange(Chimpanzee, Trial) %>%
+  group_by(Condition) %>%
+  mutate(trial.per.Condition = row_number())
+
+# Table
+exp1.fe.re <- fe.re.tab(fe.model = 
+                          "Belief_Revision ~ Condition*trial.per.Condition",
+                        re = "(1|Chimpanzee)", data = fullData_exp1)
+exp1.t.data <- exp1.fe.re$data
+
+# Center/scale dummy variables
+exp1.t.data$Condition.weak_first.code <-
+  exp1.t.data$Condition.weak_first - mean(exp1.t.data$Condition.weak_first)
+exp1.t.data$z.Trial <- scale(exp1.t.data$trial.per.Condition)
+
+######################### Fit preregistered GLM ################################
+
+# define controls
+contr <- glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 50000000))
+
+# fit three model levels
+full_exp.1 <- glmer(Belief_Revision ~ Condition * z.Trial + 
+                     (1 + Condition.weak_first.code * z.Trial | Chimpanzee),
+                   data = exp1.t.data, control = contr,
+                   family = binomial(link = "logit"))
+
+main_exp.1 <- glmer(Belief_Revision ~ Condition + z.Trial +
+                     (1 + Condition.weak_first.code * z.Trial | Chimpanzee),
+                   data = exp1.t.data, control = contr,
+                   family = binomial(link = "logit"))
+
+null_exp.1 <- glmer(Belief_Revision ~ 1 +
+                     (1 + Condition.weak_first.code * z.Trial | Chimpanzee),
+                   data = exp1.t.data, control = contr,
+                   family = binomial(link = "logit"))
+
+# Model diagnostics
+summary(full_exp.1)$varcor
+ranef.diagn.plot(full_exp.1)
+round(summary(full_exp.1)$coefficients, 3)
+
+######################## Check model assumptions ###############################
+
+# overdispersion
+overdisp.test(full_exp.1)
+
+# variance inflation factor
+vif(main_exp.1)
+
+# model stability
+m.stab.b <-
+  glmm.model.stab(model.res = full_exp.1, contr = contr, use = c("Chimpanzee"))
+m.stab.b$detailed$warnings
+as.data.frame(round(m.stab.b$summary[, -1], 3))
+m.stab.plot(round(m.stab.b$summary[, -1], 3))
+
+# Model stability only with models that did not give a warning message
+m.stab.b$detailed <- m.stab.b$detailed %>%
+  filter(warnings == "none")
+cbind(apply(m.stab.b$detailed, 2, min),apply(m.stab.b$detailed, 2, max))
+
+########################### Model Comparisons ##################################
+
+round(anova(full_exp.1, null_exp.1, test = "Chisq"), 3)
+round(drop1(full_exp.1, test = "Chisq"), 3)
+round(drop1(main_exp.1, test = "Chisq"), 3)
+
+# Coefficients of the full_exp1 model
+round(summary(full_exp.1)$coefficients, 3)
+
+############################# Bootstraps #######################################
+# already run and saved in the image
+
+# For full_exp.1 model
+boot.full_exp.1 <- boot.glmm.pred(model.res = full_exp.1, excl.warnings = T,
+                                 nboots = 1000, para = F, level = 0.95,
+                                 use = c("Condition", "z.Trial"))
+# Save predicted CIs
+exp1_full_ci_predicted <- boot.full_exp.1$ci.predicted
+
+# for main_exp.1 model
+boot.main_exp.1 <- boot.glmm.pred(model.res = main_exp.1, excl.warnings = T,
+                                  nboots = 1000, para = F, level = 0.95,
+                                  use = c("Condition"))
+
+# Save predicted CIs
+exp1_main_ci_predicted <- boot.main_exp.1$ci.predicted
+```
+
+```{r Experiment 1 - Fit full Stan model}
+# create data structure
+stan_exp1_full_data <- list(n = nrow(fullData_exp1), # number of trials
+                   nsubj = length(unique(fullData_exp1$subjID)),
+                   subj = fullData_exp1$subjID,
+                   condition = fullData_exp1$cond,  # 1 = strong first, 0 = weak first
+                   choice1 = fullData_exp1$choice1, # 1 = strong, 0 = weak
+                   choice2 = fullData_exp1$choice2)
+# fit model
+stan_exp1_full_fit <- sampling(model1, data=stan_exp1_full_data, 
+                               iter=20000, chains=2, cores=2, 
+                               control=list(adapt_delta = .999))
+
+# view fit
+stan_exp1_full_fit
+
+
+# extract individual parameter fits
+
+# create summary object to access parameters
+stan_exp1_full_fit.sum <- summary(stan_exp1_full_fit)$summary
+
+# Experiment 1
+exp1_fullModel_eBias <- stan_exp1_full_fit.sum[1]
+exp1_fullModel_eStrong <- stan_exp1_full_fit.sum[2]
+exp1_fullModel_eWeak <- stan_exp1_full_fit.sum[3]
+
+fullModel_subjFits <- data.frame()
+for (subj in unique(fullData_exp1$subjID)){
+  name <- unique(fullData_exp1$Chimpanzee[fullData_exp1$subjID == subj])
+  this_eStrong <- exp1_fullModel_eStrong + stan_exp1_full_fit.sum[subj + 3] 
+  this_eWeak <- exp1_fullModel_eWeak + stan_exp1_full_fit.sum[subj + 19]
+  fullModel_subjFits <- rbind(fullModel_subjFits, 
+                              data.frame(exp = "Experiment 1", name, subjID = subj,
+                                         group.eBias = exp1_fullModel_eBias,
+                                         group.eStrong = exp1_fullModel_eStrong,
+                                         group.eWeak = exp1_fullModel_eWeak,
+                                         strong = this_eStrong, weak = this_eWeak))
+}
+```
+
+## Experiment 2
+
+```{r Experiment 2 - Fit first choice GLM}
+##################### Prepare data for model fitting ###########################
+firstChoiceData_exp2_GLM <- firstChoice_exp2 %>%
+  arrange(Chimpanzee, Trial) %>%
+  group_by(Condition) %>%
+  mutate(trial.per.Condition = row_number()) %>%
+  mutate(first.evidence = case_when(
+    Condition == "strong_first" ~ "auditory_strong",
+    Condition == "weak_first" ~ "trace_weak",
+    Condition == "filler_weak" ~ "trace_weak",
+    Condition == "filler_strong" ~ "auditory_strong"
+  )) %>%
+  mutate(first.evidence.chosen = case_when(
+    Condition == "strong_first" & First_Choice == "strong" ~ "yes",
+    Condition == "strong_first" & First_Choice == "weak" ~ "no",
+    Condition == "weak_first" & First_Choice == "weak" ~ "yes",
+    Condition == "weak_first" & First_Choice == "strong" ~ "no",
+    Condition == "filler_weak" & First_Choice == "weak" ~ "yes",
+    Condition == "filler_weak" & First_Choice == "empty" ~ "no",
+    Condition == "filler_strong" & First_Choice == "strong" ~ "yes",
+    Condition == "filler_strong" & First_Choice == "empty" ~ "no"
+  )) %>%
+  mutate(first.evidence.chosen.numeric = case_when(
+    Condition == "strong_first" & First_Choice == "strong" ~ "1",
+    Condition == "strong_first" & First_Choice == "weak" ~ "0",
+    Condition == "weak_first" & First_Choice == "weak" ~ "1",
+    Condition == "weak_first" & First_Choice == "strong" ~ "0",
+    Condition == "filler_weak" & First_Choice == "weak" ~ "1",
+    Condition == "filler_weak" & First_Choice == "empty" ~ "0",
+    Condition == "filler_strong" & First_Choice == "strong" ~ "1",
+    Condition == "filler_strong" & First_Choice == "empty" ~ "0"
+  ))
+firstChoiceData_exp2_GLM$first.evidence.chosen.numeric <-
+  as.numeric(firstChoiceData_exp2_GLM$first.evidence.chosen.numeric)
+
+# Summary tables
+first.exp2.fe.re <- fe.re.tab(fe.model =
+                      "first.evidence.chosen ~ first.evidence + trial.per.Condition",
+                      re = "(1|Chimpanzee)", data = fullData_exp2_GLM)
+
+first.exp2.t.data <- first.exp2.fe.re$data
+
+
+# Center/scale dummy variables
+first.exp2.t.data$first.evidence.trace_weak.code <- 
+  first.exp2.t.data$first.evidence.trace_weak - 
+  mean(first.exp2.t.data$first.evidence.trace_weak)
+first.exp2.t.data$z.Trial <- scale(first.exp2.t.data$trial.per.Condition)
+
+######################### Fit preregistered GLM ################################
+
+# define controls
+contr <-
+  glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 50000000))
+
+# fit three model levels
+first_full_exp.2 <- glmer(first.evidence.chosen ~ first.evidence * z.Trial +
+                            (1 + first.evidence.trace_weak.code *
+                            z.Trial || Chimpanzee),
+                          data = first.exp2.t.data, control = contr,
+                          family = binomial(link = "logit")
+)
+
+first_main_exp.2 <- glmer(first.evidence.chosen ~ first.evidence + z.Trial +
+                            (1 + first.evidence.trace_weak.code *
+                            z.Trial || Chimpanzee),
+                          data = first.exp2.t.data, control = contr,
+                          family = binomial(link = "logit")
+)
+
+first_null_exp.2 <- glmer(first.evidence.chosen ~ 1 +
+                            (1 + first.evidence.trace_weak.code *
+                            z.Trial || Chimpanzee),
+                          data = first.exp2.t.data, control = contr,
+                          family = binomial(link = "logit")
+)
+
+# Model diagnostics
+summary(first_full_exp.2)$varcor
+ranef.diagn.plot(first_full_exp.2)
+round(summary(first_full_exp.2)$coefficients, 3)
+
+######################## Check model assumptions ###############################
+
+# overdispersion
+overdisp.test(first_full_exp.2)
+
+# variance inflation factor
+vif(first_main_exp.2)
+
+# model stability
+m.stab.b <-
+  glmm.model.stab(model.res = first_full_exp.2, contr = contr, 
+                  use = c("Chimpanzee"))
+m.stab.b$detailed$warnings
+as.data.frame(round(m.stab.b$summary[, -1], 3))
+m.stab.plot(round(m.stab.b$summary[, -1], 3))
+
+# Model stability only with models that did not give a warning message
+m.stab.b$detailed <- m.stab.b$detailed %>%
+  filter(warnings == "none")
+cbind(apply(m.stab.b$detailed, 2, min),apply(m.stab.b$detailed, 2, max))
+
+########################### Model Comparisons ##################################
+
+round(anova(first_full_exp.2, first_null_exp.2, test = "Chisq"), 3)
+round(drop1(first_full_exp.2, test = "Chisq"), 3)
+round(drop1(first_main_exp.2, test = "Chisq"), 3)
+
+# Coefficients of the full_exp.2 model
+round(summary(first_full_exp.2)$coefficients, 3)
+
+############################# Bootstraps #######################################
+# already run and saved in image
+
+# For full_exp.2 model
+boot.first_full_exp.2 <- boot.glmm.pred(model.res = first_full_exp.2,
+                                        excl.warnings = T,
+                                        nboots = 1000, para = F, 
+                                        level = 0.95,
+                                        use = c("first.evidence", "z.Trial"))
+
+# Save predicted CIs
+exp2_first_full_ci_predicted <- boot.first_full_exp.2$ci.predicted
+
+# Plot
+m.stab.plot(round(boot.first_full_exp.2$ci.estimates, 3))
+
+# For main_exp.2 model
+boot.first_main_exp.2 <- boot.glmm.pred(model.res = first_main_exp.2, 
+                                        excl.warnings = T,
+                                        nboots = 1000, para = F, level = 0.95,
+                                        use = c("first.evidence"))
+
+# Save predicted CIs
+exp2_first_main_ci_predicted <- boot.first_main_exp.2$ci.predicted
+
+# Plot
+m.stab.plot(round(boot.first_main_exp.2$ci.estimates, 3))
+```
+
+```{r Experiment 2 - Fit first choice Stan model}
+# create data structure
+stan_exp2_firstChoice_data <- list(n = nrow(firstChoice_exp2), # number of trials
+                                   nsubj = length(unique(firstChoice_exp2$subjID)),
+                                   subj = firstChoice_exp2$subjID,
+                                   condition = firstChoice_exp2$cond,  # 1 = strong first, 0 = weak first
+                                   choice1 = firstChoice_exp2$choice1) # 1 = strong, 0 = weak
+# fit model
+stan_exp2_firstChoice_fit <- sampling(model0, data=stan_exp2_firstChoice_data, 
+                                      iter=20000, chains=2, cores=2, 
+                                      control=list(adapt_delta = .999, max_treedepth = 15))
+
+# view fit
+stan_exp2_firstChoice_fit
+
+
+# extract individual parameter fits
+
+# create summary object to access parameters
+stan_exp2_firstChoice_fit_summary <- summary(stan_exp2_firstChoice_fit)$summary
+
+# group parameters
+exp2_firstChoice_eBias <- stan_exp2_firstChoice_fit_summary[1]
+exp2_firstChoice_eStrong <- stan_exp2_firstChoice_fit_summary[2]
+exp2_firstChoice_eWeak <- stan_exp2_firstChoice_fit_summary[3]
+
+# compile individual values (add to dataframe with Experiment 1 fits)
+for (subj in unique(firstChoice_exp2$subjID)){
+  name <- unique(firstChoice_exp2$Chimpanzee[firstChoice_exp2$subjID == subj])
+  this_eStrong <- exp2_firstChoice_Strong + stan_exp2_firstChoice_fit_summary[subj + 3] 
+  this_eWeak <- exp2_firstChoice_eWeak + stan_exp2_firstChoice_fit_summary[subj + 18]
+  firstChoice_subjFits <- rbind(firstChoice_subjFits, 
+                                data.frame(exp = "Experiment 2", name, subjID = subj, 
+                                           group.eStrong = exp2_firstChoice_eStrong, 
+                                           group.eWeak = exp2_firstChoice_eWeak,
+                                           strong = this_eStrong,
+                                           weak = this_eWeak))
+}
+```
+
+```{r Experiment 2 - Fit full GLM}
+##################### Prepare data for model fitting ###########################
+fullData_exp2 <- fullData_exp2 %>%
+  arrange(Chimpanzee, Trial) %>%
+  group_by(Condition) %>%
+  mutate(trial.per.Condition = row_number())
+
+exp2.fe.re <- fe.re.tab(fe.model =
+                          "Belief_Revision ~ Condition*trial.per.Condition",
+                        re = "(1|Chimpanzee)", data = fullData_exp2)
+exp2.t.data <- exp2.fe.re$data
+
+# Center/scale dummy variables
+exp2.t.data$Condition.weak_first.code <-
+  exp2.t.data$Condition.weak_first - mean(exp2.t.data$Condition.weak_first)
+exp2.t.data$z.Trial <-
+  scale(exp2.t.data$trial.per.Condition)
+
+######################### Fit preregistered GLM ################################
+
+# define controls
+contr <-
+  glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 50000000))
+
+# fit three model levels
+full_exp.2 <- glmer(Belief_Revision ~ Condition * z.Trial +
+                      (1 + Condition.weak_first.code * z.Trial | Chimpanzee),
+                   data = exp2.t.data, control = contr,
+                   family = binomial(link = "logit"))
+
+main_exp.2 <- glmer(Belief_Revision ~ Condition + z.Trial +
+                     (1 + Condition.weak_first.code * z.Trial | Chimpanzee),
+                   data = exp2.t.data, control = contr,
+                   family = binomial(link = "logit")
+)
+
+null_exp.2 <- glmer(Belief_Revision ~ 1 +
+                     (1 + Condition.weak_first.code * z.Trial | Chimpanzee),
+                   data = exp2.t.data, control = contr,
+                   family = binomial(link = "logit")
+)
+
+# Model diagnostics
+summary(full_exp.2)$varcor
+ranef.diagn.plot(full_exp.2)
+round(summary(full_exp.2)$coefficients, 3)
+
+######################## Check model assumptions ###############################
+
+# overdispersion
+overdisp.test(full_exp.2)
+
+# variance inflation factor
+vif(main_exp.2)
+
+# model stability
+m.stab.b <- glmm.model.stab(model.res = full_exp.2, 
+                            contr = contr, use = c("Chimpanzee"))
+m.stab.b$detailed$warnings
+as.data.frame(round(m.stab.b$summary[, -1], 3))
+m.stab.plot(round(m.stab.b$summary[, -1], 3))
+
+# Model stability only with models that did not give a warning message
+m.stab.b$detailed <- m.stab.b$detailed %>%
+  filter(warnings == "none")
+cbind(apply(m.stab.b$detailed, 2, min),apply(m.stab.b$detailed, 2, max))
+
+########################### Model Comparisons ##################################
+
+round(anova(full_exp.2, null_exp.2, test = "Chisq"), 3)
+round(drop1(full_exp.2, test = "Chisq"), 3)
+round(drop1(main_exp.2, test = "Chisq"), 3)
+
+# Coefficients of the full_exp.2 model
+round(summary(full_exp.2)$coefficients, 3)
+
+############################# Bootstraps #######################################
+# already run and saved in image
+
+# for full_exp.2 model
+boot.full_exp.2 <- boot.glmm.pred(model.res = full_exp.2, excl.warnings = T,
+                                  nboots = 1000, para = F, level = 0.95,
+                                  use = c("Condition", "z.Trial"))
+
+# Save predicted CIs
+exp2_full_ci_predicted <- boot.full_exp.2$ci.predicted
+
+# for main_exp.2 model
+boot.main_exp.2 <- boot.glmm.pred(model.res = main_exp.2, excl.warnings = T,
+                                  nboots = 1000, para = F, level = 0.95,
+                                  use = c("Condition"))
+
+# save predicted CIs
+exp2_main_ci_predicted <- boot.main_exp.2$ci.predicted
+```
+
+```{r Experiment 2 - Fit full Stan model}
+# create data structure
+stan_exp2_full_data <- list(n = nrow(fullData_exp2), # number of trials
+                   nsubj = length(unique(fullData_exp2$subjID)),
+                   subj = fullData_exp2$subjID,
+                   condition = fullData_exp2$cond,  # 1 = strong first, 0 = weak first
+                   choice1 = fullData_exp2$choice1, # 1 = strong, 0 = weak
+                   choice2 = fullData_exp2$choice2)
+# fit model
+stan_exp2_full_fit <- sampling(model1, data=stan_exp2_full_data, 
+                               iter=20000, chains=2, cores=2, 
+                               control=list(adapt_delta = .999))
+
+# view fit
+stan_exp2_full_fit
+
+
+# extract individual parameter fits
+
+# create summary object to access parameters
+stan_exp2_full_fit.sum <- summary(stan_exp2_full_fit)$summary
+
+# Experiment 1
+exp2_fullModel_eBias <- stan_exp2_full_fit.sum[1]
+exp2_fullModel_eStrong <- stan_exp2_full_fit.sum[2]
+exp2_fullModel_eWeak <- stan_exp2_full_fit.sum[3]
+
+# adding to fullModel_subjFits dataframe from Experiment 1
+for (subj in unique(fullData_exp2$subjID)){
+  name <- unique(fullData_exp2$Chimpanzee[fullData_exp2$subjID == subj])
+  this_eStrong <- exp2_fullModel_eStrong + stan_exp2_full_fit.sum[subj + 3] 
+  this_eWeak <- exp2_fullModel_eWeak + stan_exp2_full_fit.sum[subj + 18]
+  fullModel_subjFits <- rbind(fullModel_subjFits, 
+                              data.frame(exp = "Experiment 2", name, subjID = subj, 
+                                         group.eBias = exp2_fullModel_eBias,
+                                         group.eStrong = exp2_fullModel_eStrong, 
+                                         group.eWeak = exp2_fullModel_eWeak,
+                                         strong = this_eStrong, weak = this_eWeak))
+}
+```
+
+
+## Additional analyses
+
+```{r Model predicting choices}
+# Function to convert % to ordered list of choices
+sortChoice <- function(x){
+  return(c(rep(1,x*4),rep(0,4-x*4)))
+}
+
+# Compile % predicted and actual choices
+predictChoices <- data.frame()
+for (i in 1:nrow(fullModel_subjFits)){
+  # load parameters
+  this.Chimp <- fullModel_subjFits$name[i]
+  this.exp <- fullModel_subjFits$exp[i]
+  #this.eBias <- fullModel.subjFits$group.eBias[i]
+  this.eStrong <- fullModel_subjFits$strong[i]
+  this.eWeak <- fullModel_subjFits$weak[i]
+  
+  # calculate % actual choices
+  if (this.exp == "Experiment 1"){
+    actual.strong.1 <- mean(fullData_exp1$choice1[
+                            fullData_exp1$Chimpanzee == this.Chimp & 
+                            fullData_exp1$Condition == "strong_first"])
+    actual.strong.2 <- mean(fullData_exp1$choice2[
+                            fullData_exp1$Chimpanzee == this.Chimp & 
+                            fullData_exp1$Condition == "strong_first"])
+    actual.weak.1 <- mean(fullData_exp1$choice1[
+                            fullData_exp1$Chimpanzee == this.Chimp & 
+                            fullData_exp1$Condition == "weak_first"])
+    actual.weak.2 <- mean(fullData_exp1$choice2[
+                            fullData_exp1$Chimpanzee == this.Chimp & 
+                            fullData_exp1$Condition == "weak_first"])
+  } else {
+    actual.strong.1 <- mean(fullData_exp2$choice1[
+                            fullData_exp2$Chimpanzee == this.Chimp & 
+                            fullData_exp2$Condition == "strong_first"])
+    actual.strong.2 <- mean(fullData_exp2$choice2[
+                            fullData_exp2$Chimpanzee == this.Chimp & 
+                            fullData_exp2$Condition == "strong_first"])
+    actual.weak.1 <- mean(fullData_exp2$choice1[
+                            fullData_exp2$Chimpanzee == this.Chimp & 
+                            fullData_exp2$Condition == "weak_first"])
+    actual.weak.2 <- mean(fullData_exp2$choice2[
+                            fullData_exp2$Chimpanzee == this.Chimp & 
+                            fullData_exp2$Condition == "weak_first"])
+  }
+  
+  # calculate probabilities based on model fit
+  # need to add eBias once refit
+  strongFirst.choice1 <- inv_logit(this.eStrong) # + this.eBias
+  strongFirst.choice2 <- inv_logit(this.eStrong + this.eWeak) # + this.eBias
+  
+  weakFirst.choice1 <- inv_logit(this.eWeak) # + this.eBias
+  weakFirst.choice2 <- inv_logit(this.eStrong + this.eWeak) # + this.eBias
+  
+  # Simulate choices 10,000 times to calculate overlap
+  choices.strong.1 <- sortChoice(actual.strong.1)
+  choices.strong.2 <- sortChoice(actual.strong.2)
+  choices.weak.1 <- sortChoice(actual.weak.1)
+  choices.weak.2 <- sortChoice(actual.weak.2)
+  simDat <- data.frame()
+  for (x in 1:10000){
+    sim.strong.1 <- sort(rbinom(n = 4, 1, strongFirst.choice1),decreasing=T)
+    error.strong.1 <- sum(abs(choices.strong.1 - sim.strong.1))/4
+    
+    sim.strong.2 <- sort(rbinom(n = 4, 1, strongFirst.choice2),decreasing=T)
+    error.strong.2 <- sum(abs(choices.strong.2 - sim.strong.2))/4
+    
+    sim.weak.1 <- sort(rbinom(n = 4, 1, weakFirst.choice1),decreasing=T)
+    error.weak.1 <- sum(abs(choices.weak.1 - sim.weak.1))/4
+    
+    sim.weak.2 <- sort(rbinom(n = 4, 1, weakFirst.choice2),decreasing=T)
+    error.weak.2 <- sum(abs(choices.weak.2 - sim.weak.2))/4
+    
+    simDat <- rbind(simDat, data.frame(x, error.strong.1, error.strong.2,
+                                   error.weak.1, error.weak.2))
+  }
+  
+  mError.strong.1 <- mean(simDat$error.strong.1)
+  mError.strong.2 <- mean(simDat$error.strong.2)
+  mError.weak.1 <- mean(simDat$error.weak.1)
+  mError.weak.2 <- mean(simDat$error.weak.2)
+  
+  
+  predictChoices <- rbind(predictChoices, 
+                          data.frame(chimp = this.Chimp,
+                                     exp = this.exp,
+                                     eStrong = this.eStrong,
+                                     eWeak = this.eWeak,
+                                     pred.strong.1 = strongFirst.choice1,
+                                     actual.strong.1,
+                                     pred.strong.2 = strongFirst.choice2,
+                                     actual.strong.2,
+                                     pred.weak.1 = weakFirst.choice1,
+                                     actual.weak.1, 
+                                     pred.weak.2 = weakFirst.choice2,
+                                     actual.weak.2,
+                                     mError.strong.1, 
+                                     mError.strong.2,
+                                     mError.weak.1, 
+                                     mError.weak.2))
+}
+
+
+# across chimps, average % of trials *incorrectly* predicted by model
+mean(c(predictChoices$mError.strong.1,predictChoices$mError.strong.2,
+       predictChoices$mError.weak.1,predictChoices$mError.weak.2))
+se(c(predictChoices$mError.strong.1,predictChoices$mError.strong.2,
+       predictChoices$mError.weak.1,predictChoices$mError.weak.2))
+
+
+mean(predictChoices$mError.strong.1)
+mean(predictChoices$mError.strong.2)
+mean(predictChoices$mError.weak.1)
+mean(predictChoices$mError.weak.2)
+```
+
+difference in final choice by order:
+the results of a statistical test of whether they choose the strong evidence more than expected by chance and whether there's any difference in the two conditions for experiment one and experiment two how often they follow the strong evidence
+
+```{r Commutativity}
+# q1: follow strong evidence more than expected by chance
+
+# experiment 1
+# strong first condition
+binom.test(x = sum(fullData_exp1$choice2[fullData_exp1$Condition == "strong_first"]),
+           n = nrow(fullData_exp1[fullData_exp1$Condition == "strong_first",]), 
+           p = 0.5, alternative = "two.sided")
+
+# weak first condition
+binom.test(x = sum(fullData_exp1$choice2[fullData_exp1$Condition == "weak_first"]),
+           n = nrow(fullData_exp1[fullData_exp1$Condition == "weak_first",]), 
+           p = 0.5, alternative = "two.sided")
+
+# experiment 2
+# strong first condition
+binom.test(x = sum(fullData_exp2$choice2[fullData_exp2$Condition == "strong_first"]),
+           n = nrow(fullData_exp2[fullData_exp2$Condition == "strong_first",]), 
+           p = 0.5, alternative = "two.sided")
+
+# weak first condition
+binom.test(x = sum(fullData_exp2$choice2[fullData_exp2$Condition == "weak_first"]),
+           n = nrow(fullData_exp2[fullData_exp2$Condition == "weak_first",]), 
+           p = 0.5, alternative = "two.sided")
+
+
+# q2: difference in conditions for choosing strong in choice 2
+
+# experiment 1
+prop.test(x = c(sum(fullData_exp1$choice2[fullData_exp1$Condition == "strong_first"]),
+                sum(fullData_exp1$choice2[fullData_exp1$Condition == "weak_first"])),
+          n = c(nrow(fullData_exp1[fullData_exp1$Condition == "strong_first",]),
+                nrow(fullData_exp1[fullData_exp1$Condition == "weak_first",])), 
+          alternative = "two.sided", correct = T)
+
+# experiment 2
+prop.test(x = c(sum(fullData_exp2$choice2[fullData_exp2$Condition == "strong_first"]),
+                sum(fullData_exp2$choice2[fullData_exp2$Condition == "weak_first"])),
+          n = c(nrow(fullData_exp2[fullData_exp2$Condition == "strong_first",]),
+                nrow(fullData_exp2[fullData_exp2$Condition == "weak_first",])), 
+          alternative = "two.sided", correct = T)
+
+
+# ggplot()
+```
+
+```{r Communitivity}
+##################### Prepare data for model fitting ###########################
+secondChoiceData_exp1_GLM <- dat1 %>%
+  filter(!grepl("filler", Condition))  %>% # deleted fillers
+  arrange(Chimpanzee, Trial) %>%
+  group_by(Condition) %>%
+  mutate(trial.per.Condition = row_number()) %>%
+  mutate(second.choice.numeric = case_when(
+    Condition == "strong_first" & Second_Choice == "strong" ~ "1",
+    Condition == "strong_first" & Second_Choice == "weak" ~ "0",
+    Condition == "weak_first" & Second_Choice == "weak" ~ "0",
+    Condition == "weak_first" & Second_Choice == "strong" ~ "1"
+  )) 
+
+# Table
+second.exp1.fe.re <- fe.re.tab(fe.model =
+    "second.choice.numeric ~ Condition + trial.per.Condition",
+  re = "(1|Chimpanzee)", data = secondChoiceData_exp1_GLM)
+second.exp1.t.data <- second.exp1.fe.re$data
+str(second.exp1.t.data)
+
+# Center/scale dummy variables
+second.exp1.t.data$Condition.weak_first.code <-
+  second.exp1.t.data$Condition.weak_first -
+  mean(second.exp1.t.data$Condition.weak_first)
+second.exp1.t.data$z.Trial <- scale(second.exp1.t.data$trial.per.Condition)
+
+
+######################### Fit preregistered GLM ################################
+
+# define controls
+contr <- glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 50000000))
+
+# fit three model levels
+second_full_exp.1 <- glmer(second.choice.numeric ~ Condition * z.Trial +
+                            (1 + Condition.weak_first.code *
+                            z.Trial || Chimpanzee),
+                          data = second.exp1.t.data, control = contr,
+                          family = binomial(link = "logit")
+)
+
+second_main_exp.1 <- glmer(second.choice.numeric ~ Condition + z.Trial +
+                            (1 + Condition.weak_first.code *
+                            z.Trial || Chimpanzee),
+                          data = second.exp1.t.data, control = contr,
+                          family = binomial(link = "logit")
+)
+
+second_null_exp.1 <- glmer(second.choice.numeric ~ 1 +
+                            (1 + Condition.weak_first.code *
+                            z.Trial || Chimpanzee),
+                          data = second.exp1.t.data, control = contr,
+                          family = binomial(link = "logit")
+)
+
+summary(second_null_exp.1) # This shows that it is different from chance! 
+
+# Model diagnostics
+summary(second_full_exp.1)$varcor
+ranef.diagn.plot(second_full_exp.1)
+round(summary(second_full_exp.1)$coefficients, 3)
+
+
+######################## Check model assumptions ###############################
+
+# overdispersion
+overdisp.test(second_full_exp.1)
+
+# variance inflation factor
+vif(second_main_exp.1)
+
+# model stability
+m.stab.b <- glmm.model.stab(model.res = second_full_exp.1, 
+                            contr = contr, use = c("Chimpanzee"))
+m.stab.b$detailed$warnings
+as.data.frame(round(m.stab.b$summary[, -1], 3))
+m.stab.plot(round(m.stab.b$summary[, -1], 3))
+
+# model stability only with models that did not give a warning message
+m.stab.b$detailed <- m.stab.b$detailed %>%
+  filter(warnings == "none")
+cbind(apply(m.stab.b$detailed, 2, min),apply(m.stab.b$detailed, 2, max))
+
+########################### Model Comparisons ##################################
+
+round(anova(second_full_exp.1, second_null_exp.1, test = "Chisq"), 3)
+round(drop1(second_full_exp.1, test = "Chisq"), 3)
+round(drop1(second_main_exp.1, test = "Chisq"), 3)
+
+# Coefficients of the full_exp.1 model
+round(summary(second_full_exp.1)$coefficients, 3)
+library("effects")
+## First peek at effects
+plot(effect("Condition", second_main_exp.1), type = "response")
+plot(effect("z.Trial", main_exp1), type = "response")
+
+
+############################# Bootstraps #######################################
+# already run and saved in image
+
+# For second_full_exp.1 model
+boot.second_full_exp.1 <- boot.glmm.pred(model.res = second_full_exp.1, 
+                                        excl.warnings = T,
+                                        nboots = 1000, para = F, level = 0.95,
+                                        use = c("second.evidence", "z.Trial"))
+# Save predicted CIs
+round(boot.second_full_exp.1$ci.estimates, 3)
+
+# Plot
+m.stab.plot(round(boot.second_full_exp.1$ci.estimates, 3))
+
+# For main_exp.1 model
+boot.second_main_exp.1 <- boot.glmm.pred(model.res = second_main_exp.1, 
+                                        excl.warnings = T,
+                                        nboots = 1000, para = F, level = 0.95,
+                                        use = c("second.evidence"))
+
+# Save predicted CIs
+exp1_second_main_ci_predicted <- boot.second_main_exp.1$ci.predicted
+
+# Plot
+m.stab.plot(round(boot.second_main_exp.1$ci.estimates, 3))
+```
+
+
+
+## Plots
+
+```{r Figure 0 - Individual Bayesian fits from first choices}
+######################## Prepare data for plotting #############################
+
+# add SE
+firstChoice_subjFits$strongSE[firstChoice_subjFits$exp=="Experiment 1"] <- 
+  se(firstChoice_subjFits$strong[firstChoice_subjFits$exp=="Experiment 1"])
+firstChoice_subjFits$weakSE[firstChoice_subjFits$exp=="Experiment 1"] <- 
+  se(firstChoice_subjFits$weak[firstChoice_subjFits$exp=="Experiment 1"])
+firstChoice_subjFits$strongSE[firstChoice_subjFits$exp=="Experiment 2"] <- 
+  se(firstChoice_subjFits$strong[firstChoice_subjFits$exp=="Experiment 2"])
+firstChoice_subjFits$weakSE[firstChoice_subjFits$exp=="Experiment 2"] <- 
+  se(firstChoice_subjFits$weak[firstChoice_subjFits$exp=="Experiment 2"])
+# rename columns
+colnames(firstChoice_subjFits)[c(6,7)] <- c('strong evidence','weak evidence')
+# convert to long format
+firstChoice_subjFitsLong <- melt(plot.firstChoice_subjFits, 
+                                 id.vars = c("exp","name","subjID",
+                                             "group.eStrong","group.eWeak",
+                                             "strongSE","weakSE"), 
+                                 variable.name = "parameter")
+
+
+################################## Plot ########################################
+
+fig0 <- firstChoice_subjFitsLong %>% 
+  # sort for jitter to align correctly
+  arrange(exp, subjID, parameter) %>% 
+  ggplot(., aes(x = parameter, y = value, fill = parameter))+
+    # points and lines
+    geom_hline(yintercept = 0, linetype = 2, linewidth = 1, color = "gray")+
+    geom_line(aes(group = subjID), color = "gray", alpha = .75, 
+              position = position_jitter(width = 0.1, seed = 81293))+
+    geom_violin(alpha = .25)+ 
+    geom_point(aes(color = parameter), alpha = .5, size = 1.75, 
+               position = position_jitter(width = 0.1, seed = 81293))+
+    # means and error bars
+    geom_point(aes(x=1,y=group.eStrong),color = "#4291F8",size = 2,alpha = .5,
+               position=position_nudge(x = -.25, y = 0))+
+    geom_point(aes(x=2,y=group.eWeak),color = "#F19134",size = 2,alpha = .5,
+               position=position_nudge(x = -.25, y = 0))+
+    geom_errorbar(aes(x = 1,ymin = group.eStrong - strongSE, 
+                      ymax = group.eStrong + strongSE),
+                  position=position_nudge(x = -.25, y = 0),
+                  alpha = .5,color = "#4291F8",width=0.15)+
+    geom_errorbar(aes(x = 2,ymin = group.eWeak - weakSE, 
+                      ymax = group.eWeak + weakSE),
+                  position=position_nudge(x = -.25, y = 0),
+                  alpha = .5,color = "#F19134",width=0.15)+
+    # aesthetics
+    facet_grid(. ~ exp)+
+    theme_classic(base_size=14)+
+    theme(aspect=1, 
+          legend.position = "none", 
+          strip.text.x = element_text(hjust = 0), 
+          axis.title.y = element_text(margin=margin(t=0,r=19,b=0,l=0)),
+          axis.text.x = element_text(size=14))+
+    labs(x = "parameter", 
+         y = "model-fitted evidence strength\nbased on first choice")+
+    scale_fill_manual(values = c("#4291F8", "#F19134"))+
+    scale_colour_manual(values = c("#4291F8", "#F19134"))+
+    scale_x_discrete(labels=c(expression(italic('e'["strong"])), 
+                              expression(italic('e'['weak']))))
+
+fig0
+```
+
+
+```{r Figure 2A - First choice}
+######################## Prepare data for plotting #############################
+
+# calculate each chimp's average response for the first choice
+firstChoice_plotData <- data.frame()
+# experiment 1
+for (chimp in unique(firstChoice_exp1$Chimpanzee)){
+  thisChimp <- subset(firstChoice_exp1, Chimpanzee == chimp)
+  avgStrong <- mean(thisChimp$choice1[thisChimp$Condition == "strong_first"])
+  avgWeak <- 1-mean(thisChimp$choice1[thisChimp$Condition == "weak_first"])
+  firstChoice_plotData <- rbind(firstChoice_plotData, 
+                                data.frame(exp=c("Experiment 1",
+                                                 "Experiment 1"), 
+                                           chimp=c(chimp,chimp), 
+                                           condition = c("strong", "weak"), 
+                                           condExp = c("visual_strong",
+                                                       "auditory_weak"),
+                                           resp=c(avgStrong, avgWeak)))
+}
+
+# experiment 2
+for (chimp in unique(firstChoice_exp2$Chimpanzee)){
+  thisChimp <- subset(firstChoice_exp2, Chimpanzee == chimp)
+  avgStrong <- mean(thisChimp$choice1[thisChimp$Condition == "strong_first"])
+  avgWeak <- 1-mean(thisChimp$choice1[thisChimp$Condition == "weak_first"])
+  firstChoice_plotData <- rbind(firstChoice_plotData,
+                                data.frame(exp=c("Experiment 2",
+                                                 "Experiment 2"), 
+                                           chimp=c(chimp,chimp), 
+                                           condition = c("strong", "weak"),
+                                           condExp = c("auditory_strong",
+                                                       "trace_weak"),
+                                           resp=c(avgStrong, avgWeak)))
+}
+# convert condition to factor
+firstChoice_plotData$condExp <- factor(firstChoice_plotData$condExp, 
+                                       levels = c("visual_strong",
+                                                  "auditory_weak",
+                                                  "auditory_strong",
+                                                  "trace_weak"),
+                                       labels = c("strong (visual)",
+                                                  "weak (auditory)",
+                                                  "strong (auditory)",
+                                                  "weak (trace)"))
+
+
+# Add mean and SE for error bars from GLM 
+exp1_first_full_ci_predicted$exp <- "Experiment 1"
+exp2_first_full_ci_predicted$exp <- "Experiment 2"
+first_ci_predicted <- rbind(exp1_first_full_ci_predicted, 
+                            exp2_first_full_ci_predicted)
+
+for (i in 1:nrow(firstChoice_plotData)){
+  thisExp <- firstChoice_plotData$exp[i]
+  thisCondition <- firstChoice_plotData$condExp[i]
+  
+  # find z-value closest to 0 for this condition
+  min.z <- min(abs(first_ci_predicted$
+                     z.Trial[first_ci_predicted$exp == thisExp & 
+                               first_ci_predicted$first.evidence 
+                             == thisCondition]))
+  thisRow <- first_ci_predicted[first_ci_predicted$z.Trial == min.z & 
+                                  irst_ci_predicted$exp == thisExp &
+                                  first_ci_predicted$first.evidence
+                                    == thisCondition,]
+  
+  # add to dataframe
+  firstChoice_plotData$meanVal[i] <- thisRow$fitted
+  firstChoice_plotData$lower.cl[i] <- thisRow$lower.cl
+  firstChoice_plotData$upper.cl[i] <- thisRow$upper.cl
+}
+
+
+################################## Plot ########################################
+
+fig2A <- firstChoice_plotData %>% 
+  # sort to make jitter align correctly
+  arrange(exp, chimp, condition, resp) %>% 
+  ggplot(., aes(x = condExp, y = resp, fill = condition))+
+    # points, violin, and lines
+    geom_hline(yintercept = .5, linetype = 2, linewidth = 1, color = "gray")+
+    geom_line(aes(group = chimp), color = "gray", alpha = .75, 
+              position = position_jitter(width = 0.05, height = .05, 
+                                         seed = 810293))+
+    geom_violin(alpha = .25)+ 
+    geom_point(aes(color = condition), alpha = .5, size = 1.75, 
+               position = position_jitter(width = 0.05, height = .05, 
+                                          seed = 810293))+
+    # mean and error bars
+    geom_point(aes(x=condExp,y=meanVal, color = condition),size = 2, 
+               position=position_nudge(x = -.25, y = 0))+
+    geom_errorbar(aes(x = condExp, ymin = lower, ymax = upper,
+                      color = condition),
+                  width=0.15, position=position_nudge(x = -.25, y = 0))+
+    # aesthetics
+    facet_grid(. ~ exp, scales = "free")+
+    theme_classic(base_size=18)+
+    theme(legend.position = "none", strip.text.x = element_text(hjust = 0),
+          axis.title.y = element_text(margin=margin(t=0,r=10,b=0,l=0)),
+          axis.title.x = element_text(margin=margin(t=10,r=0,b=0,l=0)))+
+    labs(x = "type of evidence", 
+         y = "proportion following evidence presented")+
+    scale_y_continuous(labels = scales::percent)+
+    scale_fill_manual(values = c("#4291F8", "#F19134"))+
+    scale_colour_manual(values = c("#4291F8", "#F19134"))
+
+fig2A
+```
+
+
+```{r Figure 2B - Proportion of belief revision}
+######################## Prepare data for plotting #############################
+
+# calculate each chimp's rate of revising belief per condition
+beliefRevision_plotData <- data.frame()
+# experiment 1
+for (chimp in unique(fullData_exp1$Chimpanzee)){
+  thisChimp <- subset(fullData_exp1, Chimpanzee == chimp)
+  reviseStrongFirst <- mean(thisChimp$belief_r[thisChimp$Condition == "strong_first"])
+  reviseWeakFirst <- mean(thisChimp$belief_r[thisChimp$Condition == "weak_first"])
+  beliefRevision_plotData <- rbind(beliefRevision_plotData, 
+                                   data.frame(exp=c("Experiment 1",
+                                                    "Experiment 1"), 
+                                              chimp=c(chimp,chimp), 
+                                              condition = c("strong first", 
+                                                            "weak first"),
+                                              revision=c(reviseStrongFirst, 
+                                                         reviseWeakFirst))) 
+}
+
+# experiment 2
+for (chimp in unique(fullData_exp1$Chimpanzee)){
+  thisChimp <- subset(fullData_exp1, Chimpanzee == chimp)
+  reviseStrongFirst <- mean(thisChimp$belief_r[thisChimp$Condition == "strong_first"])
+  reviseWeakFirst <- mean(thisChimp$belief_r[thisChimp$Condition == "weak_first"])
+  beliefRevision_plotData <- rbind(beliefRevision_plotData, 
+                                   data.frame(exp=c("Experiment 2",
+                                                    "Experiment 2"), 
+                                              chimp=c(chimp,chimp), 
+                                              condition = c("strong first",
+                                                            "weak first"),
+                                              revision=c(reviseStrongFirst,
+                                                         reviseWeakFirst)))
+}
+
+# Add mean and SE for error bars from GLM 
+# Experiment 1
+# strong first condition
+minz.Strong <- min(abs(exp1_full_ci_predicted$z.Trial[exp1_full_ci_predicted$first.evidence == "visual_strong"]))
+# mean
+beliefRevision_plotData$meanVal[beliefRevision_plotData$exp == "Experiment 1" 
+                       & beliefRevision_plotData$condition == "strong first"] <- 
+  exp1_full_ci_predicted$fitted[exp1_full_ci_predicted$z.Trial == minz.Strong & 
+                                exp1_full_ci_predicted$first.evidence == "visual_strong"]
+# lower
+beliefRevision_plotData$meanVal[beliefRevision_plotData$exp == "Experiment 1" 
+                       & beliefRevision_plotData$condition == "strong first"] <- 
+  exp1_full_ci_predicted$lower.cl[exp1_full_ci_predicted$z.Trial == minz.Strong & 
+                                exp1_full_ci_predicted$first.evidence == "visual_strong"]
+# upper
+beliefRevision_plotData$meanVal[beliefRevision_plotData$exp == "Experiment 1" 
+                       & beliefRevision_plotData$condition == "strong first"] <- 
+  exp1_full_ci_predicted$upper.cl[exp1_full_ci_predicted$z.Trial == minz.Strong & 
+                                exp1_full_ci_predicted$first.evidence == "visual_strong"]
+
+# weak first condition
+minz.Weak <- min(abs(exp1_full_ci_predicted$z.Trial[exp1_full_ci_predicted$first.evidence == "auditory_weak"]))
+# mean
+beliefRevision_plotData$meanVal[beliefRevision_plotData$exp == "Experiment 1" 
+                       & beliefRevision_plotData$condition == "weak first"] <- 
+  exp1_full_ci_predicted$fitted[exp1_full_ci_predicted$z.Trial == minz.Weak & 
+                                exp1_full_ci_predicted$first.evidence == "auditory_weak"]
+# lower
+beliefRevision_plotData$meanVal[beliefRevision_plotData$exp == "Experiment 1" 
+                       & beliefRevision_plotData$condition == "weak first"] <- 
+  exp1_full_ci_predicted$lower.cl[exp1_full_ci_predicted$z.Trial == minz.Weak & 
+                                exp1_full_ci_predicted$first.evidence == "auditory_weak"]
+# upper
+beliefRevision_plotData$meanVal[beliefRevision_plotData$exp == "Experiment 1" 
+                       & beliefRevision_plotData$condition == "weak first"] <- 
+  exp1_full_ci_predicted$upper.cl[exp1_full_ci_predicted$z.Trial == minz.Weak & 
+                                exp1_full_ci_predicted$first.evidence == "auditory_weak"]
+
+
+################################## Plot ########################################
+
+fig2B <- beliefRevision_plotData %>% 
+  # sort by id and time: 
+  arrange(exp, chimp, revision) %>% 
+  ggplot(., aes(x = condition, y = revision, fill = condition))+
+    # points and lines
+    geom_hline(yintercept = .5, linetype = 2, linewidth = 1, color = "gray")+
+    geom_line(aes(group = chimp), color = "gray", alpha = .75, 
+              position = position_jitter(width = 0.05, height = 0.05, 
+                                         seed = 2))+
+    geom_violin(alpha = .25)+ 
+    geom_point(aes(color = condition), alpha = .5, size = 1.75, 
+               position = position_jitter(width = 0.05, height = 0.05, 
+                                          seed = 2))+
+    # mean and error bars
+    geom_point(aes(x = condition, y = meanVal,color = condition), size = 2, 
+               position=position_nudge(x = -.25, y = 0))+
+    geom_errorbar(aes(x = condition, ymin = lower, ymax = upper, 
+                      color = condition),
+                  width=0.15, 
+                  position=position_nudge(x = -.25, y = 0))+
+    # aesthetics
+    facet_grid(. ~ exp)+
+    theme_classic(base_size=18)+
+    theme(legend.position = "none", strip.text.x = element_text(hjust = 0),
+          axis.title.y = element_text(margin=margin(t=0,r=19,b=0,l=0)),
+          axis.title.x = element_text(margin=margin(t=10,r=0,b=0,l=0)))+
+    labs(x = "evidence condition", 
+         y = "proportion of belief revision")+
+    scale_y_continuous(labels = scales::percent)+
+    scale_fill_manual(values = c("#4291F8", "#F19134"))+
+    scale_colour_manual(values = c("#4291F8", "#F19134"))
+
+fig2B
+```
+
+
+```{r Figure 2C - Individual full Bayesian fits}
+######################## Prepare data for plotting #############################
+
+# add SEs
+fullModel_subjFits$strongSE[fullModel_subjFits$exp == "Experiment 1"] <- 
+  se(fullModel_subjFits$strong[fullModel_subjFits$exp == "Experiment 1"])
+fullModel_subjFits$strongSE[fullModel_subjFits$exp == "Experiment 2"] <- 
+  se(fullModel_subjFits$strong[fullModel_subjFits$exp == "Experiment 2"])
+fullModel_subjFits$weakSE[fullModel_subjFits$exp == "Experiment 1"] <- 
+  se(fullModel_subjFits$weak[fullModel_subjFits$exp == "Experiment 1"])
+fullModel_subjFits$weakSE[fullModel_subjFits$exp == "Experiment 2"] <- 
+  se(fullModel_subjFits$weak[fullModel_subjFits$exp == "Experiment 2"])
+
+# rename columns
+fullModel_subjFits[c(6:7)] <- c('strong evidence','weak evidence')
+
+# convert to long format
+fullModel_subjFitsLong <- melt(fullModel_subjFits, 
+                               id.vars = c("exp","name","subjID",
+                                           "group.eStrong","group.eWeak",
+                                           "strongSE","weakSE"), 
+                               variable.name = "parameter")
+
+
+################################## Plot ########################################
+
+fig2C <- fullModel_subjFitsLong %>% 
+  # sort for jitter to align correctly
+  arrange(exp, subjID, parameter) %>% 
+  ggplot(., aes(x = parameter, y = value, fill = parameter))+
+    # points and lines
+    geom_hline(yintercept = 0, linetype = 2, linewidth = 1, color = "gray")+
+    geom_line(aes(group = subjID), color = "gray", alpha = .75, 
+              position = position_jitter(width = 0.1, seed = 81293))+
+    geom_violin(alpha = .25)+ 
+    geom_point(aes(color = parameter), alpha = .5, size = 1.75, 
+               position = position_jitter(width = 0.1, seed = 81293))+
+    # means and error bars
+    geom_point(aes(x=1,y=group.eStrong),color = "#4291F8",size = 2,alpha = .5,
+               position=position_nudge(x = -.25, y = 0))+
+    geom_point(aes(x=2,y=group.eWeak),color = "#F19134",size = 2,alpha = .5,
+               position=position_nudge(x = -.25, y = 0))+
+    geom_errorbar(aes(x = 1,ymin = group.eStrong - strongSE, 
+                      ymax = group.eStrong + strongSE),
+                  position=position_nudge(x = -.25, y = 0),
+                  alpha = .5,color = "#4291F8",width=0.15)+
+    geom_errorbar(aes(x = 2,ymin = group.eWeak - weakSE, 
+                      ymax = group.eWeak + weakSE),
+                  position=position_nudge(x = -.25, y = 0),
+                  alpha = .5,color = "#F19134",width=0.15)+
+    # aesthetics
+    facet_grid(. ~ exp)+
+    theme_classic(base_size=18)+
+    theme(aspect=1, 
+          legend.position = "none", 
+          strip.text.x = element_text(hjust = 0), 
+          axis.title.y = element_text(margin=margin(t=0,r=19,b=0,l=0)),
+          axis.text.x = element_text(size=14))+
+    labs(x = "parameter", y = "model-fitted evidence strength")+
+    scale_fill_manual(values = c("#4291F8", "#F19134"))+
+    scale_colour_manual(values = c("#4291F8", "#F19134"))+
+    scale_x_discrete(labels=c(expression(italic('e'["strong"])), 
+                              expression(italic('e'['weak']))))
+
+fig2C
+```
+
+
+```{r Figure 2D - individual full Bayesian fits on sigmoid, fig.width = 4, fig.height = 3}
+######################## Prepare data for plotting #############################
+
+# create data for logit curve
+logitDat <- data.frame()
+for (x in seq(-5,5,.01)){ logitDat <- rbind(logitDat, 
+                                            data.frame(x,y = inv_logit(x))) }
+
+# calculate x-axis position for each point given subject's eStrong and eWeak
+fullModel_subjFits$strongPos <- fullModel_subjFits$strong
+fullModel_subjFits$weakPos <- fullModel_subjFits$weak
+fullModel_subjFits$bothPos <- fullModel_subjFits$strong + bothExp.subjFits$weak
+
+# calculate probabilities given those x-axis positions
+fullModel_subjFits$strongProb <- inv_logit(fullModel_subjFits$strongPos)
+fullModel_subjFits$weakProb <- inv_logit(fullModel_subjFits$weakPos)
+fullModel_subjFits$bothProb <- inv_logit(fullModel_subjFits$bothPos)
+
+# convert to long format
+fullModel_subjProbs_long <- reshape(fullModel_subjFits, direction='long', 
+        varying=c('strongPos', 'strongProb', 
+                  'weakPos', 'weakProb', 
+                  'bothPos', 'bothProb'), 
+        timevar='Evidence', times=c('Strong', 'Weak', 'Both'), 
+        v.names=c('Position', 'Probability'), idvar=c('exp','subjID'))
+
+# reset row names
+rownames(fullModel_subjProbs_long) <- seq(1,nrow(fullModel_subjProbs_long),1)
+
+
+################################## Plot ########################################
+
+fig2D <- ggplot(data = fullModel_subjProbs_long, 
+                aes(x = Position, y = Probability, color = Evidence))+
+  # base sigmoid
+  geom_path(data=logitDat, aes(x = x, y = y), 
+            linewidth = 1.5, alpha = .25, color = "black")+
+  # lines to y-axis
+  geom_segment(aes(x = group.eStrong + group.eBias, xend=0,
+                   y = inv_logit(group.eStrong + group.eBias), 
+                   yend = inv_logit(group.eStrong + group.eBias)),
+               color = "#4291F8", alpha = .03, linetype = 2)+
+  geom_segment(aes(x = group.eWeak + group.eBias, xend = 0,
+                   y = inv_logit(group.eWeak + group.eBias), 
+                   yend = inv_logit(group.eWeak + group.eBias)), 
+               color = "#F19134", alpha = .03, linetype = 2)+
+  geom_segment(aes(x = group.eStrong + group.eWeak + group.eBias, xend = 0,
+                   y = inv_logit(group.eStrong + group.eWeak + group.eBias), 
+                   yend = inv_logit(group.eStrong + group.eWeak + group.eBias)), 
+               color = "#097054", alpha = .03, linetype = 2)+
+  # subject points
+  geom_point(size = 3, alpha = .5)+
+  # mean points
+  geom_point(aes(x = (group.eStrong + group.eBias), 
+                 y=inv_logit(group.eStrong + group.eBias)),
+             colour="black",fill = "#4291F8",shape=23,size = 3.75)+
+  geom_point(aes(x = (group.eWeak + group.eBias), 
+                 y=inv_logit(group.eWeak + group.eBias)),
+             colour="black",fill = "#F19134",shape=23,size = 3.75)+
+  geom_point(aes(x = (group.eStrong + group.eWeak + group.eBias), 
+                 y=inv_logit(group.eStrong + group.eWeak + group.eBias)),
+             colour="black",fill = "#097054",shape=23,size = 3.75)+
+  # aesthetics
+  facet_grid(. ~ exp)+
+  theme_classic(base_size = 18)+
+  theme(aspect = 1, 
+        axis.title.x = element_text(margin=margin(t=15,r=0,b=0,l=0)),
+        axis.title.y = element_text(margin=margin(t=0,r=25,b=0,l=0)),
+        strip.text.x = element_text(hjust = 0))+
+  theme(legend.position = c(.975, .25),legend.margin = margin(0, 0, 0, 0),
+        legend.justification = c("right"),legend.box.just = "right",
+        legend.title=element_text(size=14),legend.text=element_text(size=12))+
+  labs(x = "model-fitted evidence strength", 
+       y = "probability of choosing 'strong'", 
+       color = "type of evidence")+
+  coord_axes_inside(labels_inside = TRUE)+
+  scale_y_continuous(labels = scales::percent)+
+  scale_color_manual(values = c("#4291F8","#F19134", "#097054"),
+                     breaks = c("Strong", "Weak", "Both"),
+                     labels = c("strong", "weak", "both"))
+
+fig2D
+```

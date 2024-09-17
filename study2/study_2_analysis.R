@@ -41,8 +41,13 @@ xdata <-
 xdata <-
   xdata %>%
   arrange(Chimpanzee, Trial) %>%
-  group_by(Condition) %>%
-  mutate(trial.per.Condition = row_number())
+  group_by(Chimpanzee, Condition) %>%
+  mutate(trial.per.Condition = row_number()) %>%
+  ungroup()
+
+tapply(as.numeric(xdata$Belief_Revision)-1,
+       list(xdata$Condition, as.factor(xdata$trial.per.Condition)), mean)
+
 
 ############################################################################
 # PREPARE DATAFRAME FOR MODEL FITTING
@@ -66,8 +71,10 @@ t.data$z.Trial <-
 ############################################################################
 # FITTING THE MODEL AS PREREGISTERED
 ############################################################################
-contr <-
-  glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 50000000))
+contr <- glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 10000000))
+
+contr = glmerControl(optimizer = "nloptwrap",
+optCtrl = list(algorithm = "NLOPT_LN_NELDERMEAD",  maxit = 1e9))
 
 full_exp2 <- glmer(Belief_Revision ~
                 Condition * z.Trial +

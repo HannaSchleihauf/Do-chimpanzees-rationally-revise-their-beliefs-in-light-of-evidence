@@ -274,7 +274,7 @@ figure <- ggarrange(exp1_plot_first_choice, exp2_plot_first_choice,
                     # label.x = 0,    # X position 0 for left
                     # label.y = 1,    # Y position 1 for top
                     hjust = -1, # hjust = 0 for left alignment
-                    vjust = 2.5, # hjust = 0 for left alignment
+                    vjust = 2.5, # hjust = 0 for le ft alignment
                     ncol = 2, nrow = 1
 )
 figure

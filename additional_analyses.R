@@ -32,9 +32,6 @@ xdata1$Belief_Revision <- droplevels(xdata1$Belief_Revision)
 
 xdata1 <-
   xdata1 %>%
-  arrange(Chimpanzee, Trial) %>%
-  group_by(Condition) %>%
-  mutate(trial.per.Condition = row_number()) %>%
   mutate(first.evidence = case_when(
     Condition == "strong_first" ~ "visual_strong",
     Condition == "weak_first" ~ "auditory_weak",
@@ -60,7 +57,11 @@ xdata1 <-
     Condition == "filler_weak" & First_Choice == "empty" ~ "0",
     Condition == "filler_strong" & First_Choice == "strong" ~ "1",
     Condition == "filler_strong" & First_Choice == "empty" ~ "0"
-  ))
+  )) %>%
+  arrange(Chimpanzee, Trial) %>%
+  group_by(Chimpanzee, first.evidence) %>%
+  mutate(trial.per.Condition = row_number()) %>%
+  ungroup()
 
 xdata1$first.evidence.chosen.numeric <-
   as.numeric(xdata1$first.evidence.chosen.numeric)
@@ -86,15 +87,14 @@ t.data$z.Trial <-
   scale(t.data$trial.per.Condition)
 
 ############################################################################
-# FITTING THE MODEL AS PREREGISTERED
+# FITTING THE MODEL
 ############################################################################
-contr <-
-  glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 50000000))
+contr <- glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 10000000))
 
 full_exp.1 <- glmer(first.evidence.chosen ~
   first.evidence * z.Trial +
   (1 + first.evidence.visual_strong.code *
-    z.Trial || Chimpanzee),
+    z.Trial | Chimpanzee),
 data = t.data, control = contr,
 family = binomial(link = "logit")
 )
@@ -102,7 +102,7 @@ family = binomial(link = "logit")
 main_exp.1 <- glmer(first.evidence.chosen ~
   first.evidence + z.Trial +
   (1 + first.evidence.visual_strong.code *
-    z.Trial || Chimpanzee),
+    z.Trial | Chimpanzee),
 data = t.data, control = contr,
 family = binomial(link = "logit")
 )
@@ -110,7 +110,7 @@ family = binomial(link = "logit")
 null_exp.1 <- glmer(first.evidence.chosen ~
   1 +
   (1 + first.evidence.visual_strong.code *
-    z.Trial || Chimpanzee),
+    z.Trial | Chimpanzee),
 data = t.data, control = contr,
 family = binomial(link = "logit")
 )
@@ -219,8 +219,8 @@ exp1_plot_first_choice <-
     size = 2.5, alpha = .4
   ) +
   scale_color_manual(values = c(
-    "visual_strong" = "dodgerblue",
-    "auditory_weak" = "darkorange"
+    "visual_strong" = "#4291F8",
+    "auditory_weak" = "#F19134"
   )) +
   geom_line(
     data = xdata.agg,
@@ -249,12 +249,12 @@ exp1_plot_first_choice <-
   geom_point(
     data = ci_predicted_study1_visual,
     aes(x = 1 - 0.25, y = fitted),
-    color = "dodgerblue", size = 2.5
+    color = "#4291F8", size = 2.5
   ) +
   geom_point(
     data = ci_predicted_study1_auditory,
     aes(x = 2 - 0.25, y = fitted),
-    color = "darkorange", size = 2.5
+    color = "#F19134", size = 2.5
   ) +
   scale_x_discrete(
     limits = c(
@@ -279,8 +279,8 @@ exp1_plot_first_choice <-
     alpha = .2
   ) +
   scale_fill_manual(values = c(
-    "visual_strong" = "dodgerblue",
-    "auditory_weak" = "darkorange"
+    "visual_strong" = "#4291F8",
+    "auditory_weak" = "#F19134"
   )) +
   theme_classic() +
   theme(
@@ -503,8 +503,8 @@ exp2_plot_first_choice <-
     size = 2.5, alpha = .4
   ) +
   scale_color_manual(values = c(
-    "auditory_strong" = "dodgerblue",
-    "trace_weak" = "darkorange"
+    "auditory_strong" = "#4291F8",
+    "trace_weak" = "#F19134"
   )) +
   geom_line(
     data = xdata.agg.2,
@@ -533,12 +533,12 @@ exp2_plot_first_choice <-
   geom_point(
     data = ci_predicted_study2_auditory,
     aes(x = 1 - 0.25, y = fitted),
-    color = "dodgerblue", size = 2.5
+    color = "#4291F8", size = 2.5
   ) +
   geom_point(
     data = ci_predicted_study2_trace,
     aes(x = 2 - 0.25, y = fitted),
-    color = "darkorange", size = 2.5
+    color = "#F19134", size = 2.5
   ) +
   scale_x_discrete(
     limits = c(
@@ -562,8 +562,8 @@ exp2_plot_first_choice <-
     alpha = .2
   ) +
   scale_fill_manual(values = c(
-    "auditory_strong" = "dodgerblue",
-    "trace_weak" = "darkorange"
+    "auditory_strong" = "#4291F8",
+    "trace_weak" = "#F19134"
   )) +
   theme_classic() +
   theme(
